@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+from bench.checks import CHECKS
+
 TASKS_DIR = Path(__file__).resolve().parent.parent / "tasks"
 METRIC_TYPES = {"check", "judge", "human", "operational"}
 
@@ -49,6 +51,11 @@ def validate(spec: dict) -> list[str]:
             problems.append(f"{name}: missing pass threshold")
         if not m.get("description"):
             problems.append(f"{name}: missing description")
+        if m.get("type") == "check" and m.get("check") not in CHECKS:
+            problems.append(f"{name}: check must name one of {sorted(CHECKS)}")
+    for d in spec.get("diagnostics") or []:
+        if d.get("check", d.get("name")) not in CHECKS:
+            problems.append(f"diagnostic {d.get('name')}: unknown check")
     total = sum(m.get("weight", 0) for m in metrics if isinstance(m.get("weight"), (int, float)))
     if metrics and abs(total - 1.0) > 1e-6:
         problems.append(f"weights add up to {total:.2f}, not 1.0")

@@ -50,3 +50,11 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 ## 2026-10-15: max_tokens 4096, and cut-off output counts as a failure
 - **Found:** Gemini used 645 output tokens on a one-line tagline, mostly hidden reasoning. At the old 1024 limit a full battlecard would likely be cut off on reasoning models.
 - **Why:** a truncated extract would silently feed half the facts into the draft step, so a `length` finish is reported as the step where the chain broke.
+
+## 2026-10-15: automatic checks before any LLM judge
+- **Why:** anything a rule can catch (an invented price, a missing section, a card over one page) is caught for free and with evidence, so the paid judge only scores what needs judgment.
+- **Invented facts, rough version:** flag any dollar amount or number in the card that never appears in the profiles. It misses invented claims with no number in them; that's left to the judge.
+
+## 2026-10-15: own Flesch-Kincaid instead of textstat
+- **Found:** the current textstat release downloads an NLTK dictionary on first use, which fails behind proxies and adds a setup step on every machine.
+- **Why:** the formula is three lines plus a syllable estimate. A grade that's off by half a point doesn't change any conclusion; a setup failure blocks the whole run.

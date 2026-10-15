@@ -84,3 +84,25 @@ def test_truncated_output_counts_as_a_failed_step(store, monkeypatch):
     _, results, _ = workflow.run(task, [case], MODELS[:1], settings=SETTINGS, store=store)
     assert results[0].failed_step == "extract"
     assert "max_tokens" in results[0].steps[0].error
+
+
+def test_checks_run_on_finished_outputs_only(store, monkeypatch):
+    from bench import checks, metrics
+
+    card = "## Overview\nx\n## Differentiators\nx\n## Pricing\nAt $49 per seat.\n## Objection handlers\nx\n## Landmines\nx"
+
+    async def fake(model, prompt, **kw):
+        if model.startswith("openai") and "battlecard" in prompt:
+            return CallResult(model, "", 0, 0, None, 0.0, error="RateLimitError")
+        return CallResult(model, card, 1, 1, 0.001, 0.1)
+
+    monkeypatch.setattr(compare_mod, "acall_model", fake)
+    task = tasks.load("battlecard")
+    case = dataset.load("battlecard")[0]
+    specs = checks.check_specs(metrics.load("battlecard"))
+    _, results, _ = workflow.run(task, [case], MODELS, settings=SETTINGS, store=store, check_specs=specs)
+    claude, gpt = results
+    assert claude.checks["required_sections"].passed
+    assert not claude.checks["pricing_matches_source"].passed  # $49 isn't in the profiles
+    assert claude.checks["pricing_matches_source"].detail == ["$49"]
+    assert gpt.checks == {}

@@ -8,6 +8,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from bench.checks import CheckResult, run_checks
 from bench.compare import RUNS_DIR, cached_call, new_run_id
 from bench.models import gather_limited, provider
 from bench.store import Store
@@ -32,6 +33,7 @@ class CaseResult:
     model: str
     case_id: str
     steps: list[StepResult] = field(default_factory=list)
+    checks: dict[str, CheckResult] = field(default_factory=dict)
 
     @property
     def failed_step(self) -> str | None:
@@ -59,6 +61,7 @@ class CaseResult:
             "failed_step": self.failed_step,
             "cost_usd": self.cost_usd,
             "latency_s": self.latency_s,
+            "checks": {k: v.to_dict() for k, v in self.checks.items()},
             "steps": [asdict(s) for s in self.steps],
         }
 
@@ -105,9 +108,18 @@ def write_results(run_id: str, task: Task, settings: dict, results: list[CaseRes
     return path
 
 
+def apply_checks(results: list[CaseResult], cases: list[dict], specs: list[dict]) -> None:
+    """Run the automatic checks on every finished output (failed chains have no output to check)."""
+    inputs = {c["id"]: c["inputs"] for c in cases}
+    for r in results:
+        if r.output is not None:
+            r.checks = run_checks(r.output, inputs[r.case_id], specs)
+
+
 def run(task: Task, cases: list[dict], models: list[str], *, settings: dict, mock=False, use_cache=True,
-        store=None, prices=None):
+        store=None, prices=None, check_specs: list[dict] | None = None):
     run_id = new_run_id()
     results = asyncio.run(run_matrix(task, cases, models, settings=settings, store=store or Store(),
                                      run_id=run_id, mock=mock, use_cache=use_cache, prices=prices))
+    apply_checks(results, cases, check_specs or [])
     return run_id, results, write_results(run_id, task, settings, results)
