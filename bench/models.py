@@ -50,6 +50,15 @@ def provider(model: str) -> str:
     return model.split("/", 1)[0]
 
 
+def format_error(e: Exception, limit: int = 600) -> str:
+    """One line, keeping the provider's message. Providers often put the useful
+    part on later lines (Gemini returns a multi-line JSON body)."""
+    # LiteLLM sometimes appends a traceback to the message; drop it.
+    message = str(e).split("Traceback (most recent call last)")[0]
+    text = " ".join(f"{type(e).__name__}: {message}".split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def _messages(prompt: str, system: str | None) -> list[dict]:
     messages = [{"role": "system", "content": system}] if system else []
     return messages + [{"role": "user", "content": prompt}]
@@ -121,8 +130,7 @@ async def acall_model(
             num_retries=NUM_RETRIES,
         )
     except Exception as e:
-        return CallResult(model, "", 0, 0, None, time.perf_counter() - start,
-                          error=f"{type(e).__name__}: {e}".split("\n")[0][:300])
+        return CallResult(model, "", 0, 0, None, time.perf_counter() - start, error=format_error(e))
     return _result(model, response, time.perf_counter() - start)
 
 
