@@ -19,7 +19,7 @@ def test_format_error_keeps_multiline_provider_message():
     from bench.models import format_error
 
     e = ValueError('GeminiException - {\n  "error": {\n    "message": "models/x is not found"\n  }\n}')
-    assert "models/x is not found" in format_error(e)
+    assert format_error(e) == "ValueError: models/x is not found"
     assert "\n" not in format_error(e)
 
 

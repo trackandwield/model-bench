@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -55,6 +56,10 @@ def format_error(e: Exception, limit: int = 600) -> str:
     part on later lines (Gemini returns a multi-line JSON body)."""
     # LiteLLM sometimes appends a traceback to the message; drop it.
     message = str(e).split("Traceback (most recent call last)")[0]
+    # Providers that return a JSON error body (Gemini) bury the reason in "message".
+    found = re.search(r'"message":\s*"((?:[^"\\]|\\.)*)"', message)
+    if found:
+        message = found.group(1)
     text = " ".join(f"{type(e).__name__}: {message}".split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
