@@ -12,7 +12,8 @@ def test_battlecard_draft_is_valid():
 def test_validate_catches_bad_weights_and_types():
     spec = {"metrics": [
         {"name": "a", "description": "x", "type": "vibes", "weight": 0.5, "pass": ">= 3"},
-        {"name": "a", "description": "x", "type": "judge", "weight": 0.2, "pass": ">= 3"},
+        {"name": "a", "description": "x", "type": "judge", "weight": 0.2, "pass": ">= 3",
+         "rubric": {i: "x" for i in range(1, 6)}},
     ]}
     problems = " ".join(metrics.validate(spec))
     assert "type must be" in problems
