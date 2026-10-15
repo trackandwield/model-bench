@@ -18,6 +18,15 @@ def new_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 
+def call_key(model: str, prompt: str, system: str | None, settings: dict, *, mock: bool = False,
+             cache_tag: str | None = None) -> tuple[str, dict]:
+    """Cache key and the settings it's logged with. Mock calls and tagged repeats get their own entries."""
+    key_settings = settings | {"mock": True} if mock else settings
+    if cache_tag:
+        key_settings = key_settings | {"tag": cache_tag}
+    return cache_key(model, prompt, system, key_settings), key_settings
+
+
 async def cached_call(
     model: str,
     prompt: str,
@@ -38,10 +47,7 @@ async def cached_call(
     they're never served to a real run. `cache_tag` forces a separate cache
     entry for a deliberate repeat of the same call.
     """
-    key_settings = settings | {"mock": True} if mock_text is not None else settings
-    if cache_tag:
-        key_settings = key_settings | {"tag": cache_tag}
-    key = cache_key(model, prompt, system, key_settings)
+    key, key_settings = call_key(model, prompt, system, settings, mock=mock_text is not None, cache_tag=cache_tag)
     result = store.cached(key) if use_cache else None
     if result is None:
         result = await acall_model(model, prompt, system=system, mock_response=mock_text, **settings)

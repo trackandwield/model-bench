@@ -9,8 +9,9 @@ from pathlib import Path
 import litellm
 from dotenv import load_dotenv
 
-from bench import checks, compare, dataset, judge, metrics, tasks, workflow
+from bench import checks, compare, dataset, judge, metrics, plan, tasks, workflow
 from bench.models import call_model, load_config
+from bench.store import Store
 
 
 def cmd_hello(args: argparse.Namespace) -> int:
@@ -78,6 +79,21 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     models, settings, prices = _run_config(args)
+    budget = args.budget if args.budget is not None else load_config().get("budget_usd")
+    run_id, repeats, mock = None, args.repeats, args.mock
+    if args.resume:
+        # Same run id, models, cases, repeats and settings as the saved run. Finished
+        # calls come from the cache, so only what's missing is paid for.
+        config = json.loads(Path(args.resume).read_text())
+        args.task, args.case, args.limit = config["task"], config["case_ids"], None
+        models, settings, repeats, mock = config["models"], config["settings"], config["repeats"], config["mock"]
+        run_id = config["run_id"]
+        if args.budget is None:
+            budget = config.get("budget_usd")
+        changed = plan.changed_since(config)
+        if changed:
+            print(f"Warning: {', '.join(changed)} changed since run {run_id}; results won't match the original.")
+
     task = tasks.load(args.task)
     cases = dataset.load(args.task)
     if args.case:
@@ -90,10 +106,31 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.limit:
         cases = cases[: args.limit]
 
+    store = Store()
+    print(f"{task.name}: {task.kind} with {len(task.steps)} step(s) × {len(cases)} case(s) × "
+          f"{len(models)} model(s) × {repeats} repeat(s)")
+    est = plan.estimate(task, cases, models, repeats=repeats, settings=settings, store=store, prices=prices,
+                        mock=mock, use_cache=not args.no_cache)
+    _print_estimate(est, models, budget)
+    if args.estimate:
+        return 0
+    if budget is not None and est.cost_usd > budget:
+        print(f"\nNot run: the estimate is over the ${budget:.2f} budget. "
+              f"Rerun with --budget {est.cost_usd * 1.2:.2f} (or more) to go ahead.")
+        return 1
+
+    run_id = run_id or compare.new_run_id()
+    config = plan.build_config(run_id, task.name, models, [c["id"] for c in cases], repeats=repeats,
+                               settings=settings, budget_usd=budget, mock=mock)
+    if not config["metrics_locked"] and not mock:
+        print("Note: metrics aren't locked yet (bench lock), so this run can't claim pre-registered metrics.")
+    # A resume keeps the original config, so it still says what the run first ran against.
+    config_file = Path(args.resume) if args.resume else plan.save_config(config)
+    cap = workflow.Budget(budget)
     specs = checks.check_specs(metrics.load(args.task))
-    print(f"{task.name}: {task.kind} with {len(task.steps)} step(s) × {len(cases)} case(s) × {len(models)} model(s)")
-    run_id, results, path = workflow.run(task, cases, models, settings=settings, mock=args.mock,
-                                         use_cache=not args.no_cache, prices=prices, check_specs=specs)
+    run_id, results, path = workflow.run(task, cases, models, settings=settings, mock=mock,
+                                         use_cache=not args.no_cache, prices=prices, check_specs=specs,
+                                         repeats=repeats, budget=cap, run_id=run_id, store=store)
 
     width = max(len(m) for m in models)
     print(f"\n{'model':<{width}}  {'ok':>7}  {'cost':>11}  {'avg latency':>11}  failed at")
@@ -111,8 +148,24 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"\n{r.model} on {r.case_id} failed at {r.failed_step}: {err}")
             break
     _print_checks(models, results, [s["name"] for s in specs])
-    print(f"\nrun {run_id}: outputs, checks and every step's prompt in {path}")
+    print(f"\nrun {run_id}: spent ${cap.spent:.4f}; outputs, checks and every step's prompt in {path}")
+    unfinished = sum(1 for r in results if r.failed_step)
+    if unfinished:
+        print(f"{unfinished} chain(s) didn't finish. To retry only those (finished calls are free):")
+        print(f"  uv run python -m bench run --resume {config_file}")
+    else:
+        print(f"config (to reproduce): {config_file}")
     return 1 if all(r.failed_step for r in results) else 0
+
+
+def _print_estimate(est, models: list[str], budget: float | None) -> None:
+    print(f"\nestimate: {est.calls} calls, {est.cached} already cached (free), {est.to_make} to make")
+    for m in models:
+        cost = "unknown price" if m in est.unpriced else f"${est.by_model.get(m, 0.0):.4f}"
+        guess = "  (no history yet, assumed a long answer)" if m in est.guessed and m not in est.unpriced else ""
+        print(f"  {m}: {cost}{guess}")
+    known = f"${est.cost_usd:.4f}" + (" plus unpriced models" if est.unpriced else "")
+    print(f"  total: about {known}" + (f"; budget ${budget:.2f}" if budget is not None else ""))
 
 
 def _print_checks(models: list[str], results, names: list[str]) -> None:
@@ -255,12 +308,16 @@ def build_parser() -> argparse.ArgumentParser:
     cmp.set_defaults(func=cmd_compare)
 
     run = sub.add_parser("run", help="Run a task on every model × its test cases.")
-    run.add_argument("task", help="Folder under tasks/, e.g. battlecard")
+    run.add_argument("task", nargs="?", help="Folder under tasks/, e.g. battlecard")
     run.add_argument("--case", action="append", help="Only this case id (repeatable).")
     run.add_argument("--limit", type=int, help="Only the first N cases.")
     run.add_argument("--model", action="append", help="Limit to this model id (repeatable).")
     run.add_argument("--mock", action="store_true", help="Skip the network; canned answers.")
     run.add_argument("--no-cache", action="store_true", help="Call the models even if an identical call is cached.")
+    run.add_argument("--repeats", type=int, default=1, help="Run each model on each case this many times.")
+    run.add_argument("--budget", type=float, help="Spend cap in USD; defaults to budget_usd in models.yaml.")
+    run.add_argument("--estimate", action="store_true", help="Print the cost estimate and stop.")
+    run.add_argument("--resume", metavar="CONFIG", help="Finish or reproduce a run from its runs/<id>-<task>.config.json.")
     run.set_defaults(func=cmd_run)
 
     chk = sub.add_parser("check", help="Re-run the automatic checks on an earlier run's .jsonl file (free).")
@@ -287,5 +344,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "run" and not (args.task or args.resume):
+        parser.error("run needs a task, or --resume CONFIG")
     return args.func(args)

@@ -28,10 +28,32 @@ class StepResult:
     error: str | None = None
 
 
+class Budget:
+    """A spend cap for one run. Once reached, no new calls start; calls already
+    in flight finish, so a run can go over by a few calls' worth."""
+
+    def __init__(self, limit: float | None = None):
+        self.limit = limit
+        self.spent = 0.0
+
+    def add(self, cost: float | None) -> None:
+        self.spent += cost or 0.0
+
+    @property
+    def exhausted(self) -> bool:
+        return self.limit is not None and self.spent >= self.limit
+
+
+def repeat_tag(repeat: int) -> str | None:
+    """Repeat 1 shares the normal cache; later repeats are fresh calls with their own entries."""
+    return f"repeat{repeat}" if repeat > 1 else None
+
+
 @dataclass
 class CaseResult:
     model: str
     case_id: str
+    repeat: int = 1
     steps: list[StepResult] = field(default_factory=list)
     checks: dict[str, CheckResult] = field(default_factory=dict)
 
@@ -57,6 +79,7 @@ class CaseResult:
         return {
             "model": self.model,
             "case_id": self.case_id,
+            "repeat": self.repeat,
             "output": self.output,
             "failed_step": self.failed_step,
             "cost_usd": self.cost_usd,
@@ -67,16 +90,24 @@ class CaseResult:
 
 
 async def run_case(task: Task, case: dict, model: str, *, settings: dict, store: Store, run_id: str,
-                   mock: bool = False, use_cache: bool = True, prices: dict | None = None) -> CaseResult:
-    result = CaseResult(model, case["id"])
+                   mock: bool = False, use_cache: bool = True, prices: dict | None = None, repeat: int = 1,
+                   budget: Budget | None = None) -> CaseResult:
+    result = CaseResult(model, case["id"], repeat)
     previous: dict[str, str] = {}
     for step in task.steps:
         prompt = step.render(case["inputs"], previous)
+        if budget and budget.exhausted:
+            result.steps.append(StepResult(step.name, prompt, "", 0, 0, None, 0.0, False,
+                                           f"Budget of ${budget.limit:.2f} reached; resume to finish"))
+            break
         r = await cached_call(
             model, prompt, system=task.system_prompt(), settings=settings, store=store, run_id=run_id,
             mock_text=f"Mock {step.name} from {model} for {case['id']}." if mock else None,
             use_cache=use_cache, prices=prices, input_id=f"{case['id']}:{step.name}",
+            cache_tag=repeat_tag(repeat),
         )
+        if budget and not mock and not r.cached:
+            budget.add(r.cost_usd)
         error = r.error
         if not error and r.finish_reason == "length":
             # A cut-off extract would feed half the facts into the draft step.
@@ -89,14 +120,16 @@ async def run_case(task: Task, case: dict, model: str, *, settings: dict, store:
     return result
 
 
-async def run_matrix(task: Task, cases: list[dict], models: list[str], **kw) -> list[CaseResult]:
+async def run_matrix(task: Task, cases: list[dict], models: list[str], repeats: int = 1, **kw) -> list[CaseResult]:
+    """Every model × case × repeat, with per-provider concurrency limits."""
     by_provider: dict[str, list] = defaultdict(list)
     for m in models:
         for c in cases:
-            by_provider[provider(m)].append(run_case(task, c, m, **kw))
+            for r in range(1, repeats + 1):
+                by_provider[provider(m)].append(run_case(task, c, m, repeat=r, **kw))
     results = await gather_limited(by_provider)
     rank = {(m, c["id"]): (i, j) for i, m in enumerate(models) for j, c in enumerate(cases)}
-    return sorted(results, key=lambda r: rank[(r.model, r.case_id)])
+    return sorted(results, key=lambda r: (rank[(r.model, r.case_id)], r.repeat))
 
 
 def write_results(run_id: str, task: Task, settings: dict, results: list[CaseResult]) -> Path:
@@ -117,9 +150,10 @@ def apply_checks(results: list[CaseResult], cases: list[dict], specs: list[dict]
 
 
 def run(task: Task, cases: list[dict], models: list[str], *, settings: dict, mock=False, use_cache=True,
-        store=None, prices=None, check_specs: list[dict] | None = None):
-    run_id = new_run_id()
-    results = asyncio.run(run_matrix(task, cases, models, settings=settings, store=store or Store(),
-                                     run_id=run_id, mock=mock, use_cache=use_cache, prices=prices))
+        store=None, prices=None, check_specs: list[dict] | None = None, repeats: int = 1,
+        budget: Budget | None = None, run_id: str | None = None):
+    run_id = run_id or new_run_id()
+    results = asyncio.run(run_matrix(task, cases, models, repeats=repeats, settings=settings, store=store or Store(),
+                                     run_id=run_id, mock=mock, use_cache=use_cache, prices=prices, budget=budget))
     apply_checks(results, cases, check_specs or [])
     return run_id, results, write_results(run_id, task, settings, results)
