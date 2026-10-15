@@ -38,3 +38,4 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 ## 2026-10-15: Gemini 2.5 Flash → Gemini 3.8 Flash
 - **Found:** the first real run failed because Google no longer serves `gemini-2.5-flash` to new API users.
 - **Why it matters:** model ids expire within months, so every run records the exact ids it used, and the README results carry a test date.
+- **Also found:** LiteLLM warns that Gemini 3+ plans to drop `temperature`, `top_p` and `top_k`, with sampling guidance moving into the system prompt. Another case where "same settings for every model" will stop holding.
