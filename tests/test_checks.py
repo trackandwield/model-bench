@@ -75,3 +75,15 @@ def test_unknown_check_is_a_validation_problem():
     spec = metrics.load("battlecard")
     spec["metrics"][1]["check"] = "vibes"
     assert any("check must name" in p for p in metrics.validate(spec))
+
+
+def test_k_and_m_shorthand_match_written_out_numbers():
+    src = {"x": "Growth $400/month (10k contacts), Scale $1.2M ARR, 50k contacts"}
+    out = "Growth covers 10,000 contacts; Scale 50,000. Revenue $1,200,000."
+    assert checks.unsourced_numbers(out, src).passed
+    assert checks.prices_in_source(out, src).passed
+
+
+def test_percent_and_plain_number_are_different_facts():
+    src = {"x": "Deflects 40 tickets a day."}
+    assert checks.unsourced_numbers("Deflects 40% of tickets.", src).detail == ["40%"]

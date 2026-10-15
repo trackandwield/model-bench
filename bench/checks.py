@@ -45,27 +45,32 @@ def max_words(output: str, inputs: dict, *, limit: int) -> CheckResult:
 MONEY = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?\s?(?:[kKmM]\b)?")
 
 
-def _norm_money(s: str) -> str:
-    s = s.replace(" ", "").replace(",", "").lower()
-    if s.endswith(".00"):
-        s = s[:-3]
-    return s
+def _value(token: str) -> tuple[float, bool] | None:
+    """'$1,200' -> (1200.0, False), '10k' -> (10000.0, False), '60%' -> (60.0, True).
+
+    Comparing values, not strings, means "10k contacts" in a profile matches
+    "10,000 contacts" in a card.
+    """
+    t = token.replace("$", "").replace(",", "").replace(" ", "").lower().rstrip("+")
+    percent = t.endswith("%")
+    t = t.rstrip("%")
+    scale = {"k": 1_000, "m": 1_000_000}.get(t[-1:], 1)
+    if scale != 1:
+        t = t[:-1]
+    try:
+        return round(float(t) * scale, 6), percent
+    except ValueError:
+        return None
 
 
 def prices_in_source(output: str, inputs: dict) -> CheckResult:
     """Every dollar amount in the output appears in the inputs. Catches invented prices."""
-    source = {_norm_money(m) for m in MONEY.findall(_source_text(inputs))}
-    invented = sorted({m.strip() for m in MONEY.findall(output) if _norm_money(m) not in source})
+    source = {_value(m) for m in MONEY.findall(_source_text(inputs))}
+    invented = sorted({m.strip() for m in MONEY.findall(output) if _value(m) not in source})
     return CheckResult("prices_in_source", not invented, len(invented), invented)
 
 
 NUMBER = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?:\s?%|\s?[kKmM]\b|\+)?")
-
-
-def _bare(n: str) -> str:
-    """'1,200/month' -> '1200', '60%' -> '60', '30k' -> '30k' (scale kept, unit dropped)."""
-    n = n.replace(",", "").replace(" ", "").lower().rstrip("+%")
-    return n
 
 
 def unsourced_numbers(output: str, inputs: dict) -> CheckResult:
@@ -75,13 +80,13 @@ def unsourced_numbers(output: str, inputs: dict) -> CheckResult:
     can't catch an invented claim with no number in it; that's the judge's job.
     Whole numbers up to 10 are ignored ("three differentiators", "step 2").
     """
-    source = {_bare(n) for n in NUMBER.findall(_source_text(inputs))}
+    source = {_value(n) for n in NUMBER.findall(_source_text(inputs))}
     found = set()
     for n in NUMBER.findall(output):
-        b = _bare(n)
-        if b.isdigit() and int(b) <= 10:
+        v = _value(n)
+        if v is None or (not v[1] and v[0] <= 10 and v[0].is_integer()):
             continue
-        if b not in source:
+        if v not in source:
             found.add(n.strip())
     return CheckResult("unsourced_numbers", not found, len(found), sorted(found))
 
