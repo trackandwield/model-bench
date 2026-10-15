@@ -1,0 +1,41 @@
+# The battlecard task as a 2-step workflow: pull out the facts first, then write
+# from those facts only. Splitting it shows where a model goes wrong: misreading
+# the profile (step 1) or embellishing while writing (step 2).
+task: battlecard
+system: >-
+  You are a product marketing manager at a B2B software company writing sales
+  enablement material. Use only the information you are given. If something a
+  rep would want is not in the information, say it is unknown rather than guess.
+
+steps:
+  - name: extract
+    prompt: |
+      Below are two company profiles. List every fact a sales rep could use in a
+      competitive deal, as short bullet points under two headings: "Our product"
+      and "Competitor". Include prices exactly as written. After the bullets, add
+      a heading "Unknown" listing anything important a rep would ask about that
+      the profiles don't answer (for example, pricing that isn't public).
+
+      Our product:
+      {{ our_product }}
+
+      Competitor:
+      {{ competitor }}
+
+  - name: draft
+    prompt: |
+      Write a one-page sales battlecard (450 words or fewer) for our product
+      against the competitor, using only the facts below.
+
+      Use exactly these Markdown sections:
+      ## Overview
+      ## Differentiators
+      (three, each tied to a specific fact)
+      ## Pricing
+      ## Objection handlers
+      (three likely objections from a buyer, each with a response)
+      ## Landmines
+      (questions a rep can ask that expose the competitor's weaknesses)
+
+      Facts:
+      {{ steps.extract }}

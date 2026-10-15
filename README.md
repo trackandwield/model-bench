@@ -18,7 +18,7 @@ Marketing teams pick an AI model by gut feel or by a public leaderboard that tes
 | Milestone | State |
 |---|---|
 | 1. Foundations: setup, locked metrics, test set | Built; metrics awaiting PMM review |
-| 2. Engine: model layer, tasks, checks, judge, runs | Model layer built |
+| 2. Engine: model layer, tasks, checks, judge, runs | Model layer and task workflows built |
 | 3. Human review and analysis | Not started |
 | 4. Web app and write-up | Not started |
 
@@ -34,6 +34,8 @@ uv run python -m bench hello          # calls the first model in models.yaml
 uv run python -m bench hello --model openai/gpt-5-mini
 uv run python -m bench compare --prompt "Write a tagline for an observability product."
 uv run python -m bench compare --mock --prompt "..."   # no keys, no cost
+uv run python -m bench run battlecard --limit 1   # one case on every model first
+uv run python -m bench run battlecard            # all 20 cases × every model
 uv run python -m bench lock battlecard
 uv run python -m bench verify battlecard
 uv run pytest
@@ -41,11 +43,15 @@ uv run pytest
 
 Models live in `models.yaml` as [LiteLLM](https://docs.litellm.ai/) ids, so adding or swapping one is a config change. `compare` runs every model in parallel (a few calls at a time per provider, with retries), prints tokens, cost and latency per model, and saves the outputs to `runs/<run id>.jsonl`. Every call is also logged to `runs/bench.db`, which doubles as a cache: an identical call is served from it for $0.
 
+## Tasks
+
+A task lives in `tasks/<task>/task.yaml`: an optional system prompt, optional reference files (a brand voice guide, say) and one or more steps. One step is a plain prompt; several make a workflow, where each step's prompt can use earlier outputs as `{{ steps.<name> }}`. The battlecard task is two steps: extract the facts from the profiles, then write the card from those facts only. `bench run` records every step's prompt and output, so you can see whether a model went wrong reading the profile or embellishing while writing. A step that errors or gets cut off at `max_tokens` stops that chain and is reported as where it broke.
+
 ## Repo layout
 
 ```
 bench/          the engine (CLI, model layer, metrics)
-tasks/<task>/   metrics.yaml, its lock, and cases.jsonl (tagged test inputs)
+tasks/<task>/   task.yaml (prompt or workflow), metrics.yaml and its lock, cases.jsonl (tagged test inputs)
 models.yaml     models under test and the settings held constant
 docs/           decision log
 tests/

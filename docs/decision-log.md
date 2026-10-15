@@ -39,3 +39,14 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 - **Found:** the first real run failed because Google no longer serves `gemini-2.5-flash` to new API users.
 - **Why it matters:** model ids expire within months, so every run records the exact ids it used, and the README results carry a test date.
 - **Also found:** LiteLLM warns that Gemini 3+ plans to drop `temperature`, `top_p` and `top_k`, with sampling guidance moving into the system prompt. Another case where "same settings for every model" will stop holding.
+
+## 2026-10-15: battlecard as a 2-step workflow
+- **Options:** one prompt; extract-then-draft; research-outline-draft.
+- **Why:** splitting "pull out the facts" from "write the card" shows *where* a model invents things: misreading the profile, or embellishing while writing. Two steps keeps cost down; a third can be added in `task.yaml` without code changes.
+
+## 2026-10-15: Jinja2 with strict variables for prompts
+- **Why:** a typo in a variable name raises an error instead of sending every model a prompt with a blank in it, which would quietly ruin a whole run.
+
+## 2026-10-15: max_tokens 4096, and cut-off output counts as a failure
+- **Found:** Gemini used 645 output tokens on a one-line tagline, mostly hidden reasoning. At the old 1024 limit a full battlecard would likely be cut off on reasoning models.
+- **Why:** a truncated extract would silently feed half the facts into the draft step, so a `length` finish is reported as the step where the chain broke.

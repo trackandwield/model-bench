@@ -18,6 +18,36 @@ def new_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 
+async def cached_call(
+    model: str,
+    prompt: str,
+    *,
+    system: str | None,
+    settings: dict,
+    store: Store,
+    run_id: str,
+    mock_text: str | None = None,
+    use_cache: bool = True,
+    prices: dict[str, dict] | None = None,
+    input_id: str | None = None,
+) -> CallResult:
+    """One model call that checks the cache first, fills in configured prices, and logs the result.
+
+    `mock_text` skips the network. Mocked answers get their own cache entries so
+    they're never served to a real run.
+    """
+    key_settings = settings | {"mock": True} if mock_text is not None else settings
+    key = cache_key(model, prompt, system, key_settings)
+    result = store.cached(key) if use_cache else None
+    if result is None:
+        result = await acall_model(model, prompt, system=system, mock_response=mock_text, **settings)
+        price = (prices or {}).get(model)
+        if result.cost_usd is None and not result.error and price:
+            result.cost_usd = (result.input_tokens * price["input"] + result.output_tokens * price["output"]) / 1_000_000
+    store.log(run_id, key, key_settings, result, input_id=input_id)
+    return result
+
+
 async def compare(
     models: list[str],
     prompt: str,
@@ -31,33 +61,15 @@ async def compare(
     prices: dict[str, dict] | None = None,
 ) -> list[CallResult]:
     """`prices` fills in cost for models LiteLLM has no price for: {model: {"input": $/Mtok, "output": $/Mtok}}."""
-    prices = prices or {}
-    # Mocked answers get their own cache entries so they're never served to a real run.
-    key_settings = settings | {"mock": True} if mock else settings
-    keys = {m: cache_key(m, prompt, system, key_settings) for m in models}
-    results: dict[str, CallResult] = {}
-    to_call: dict[str, list] = defaultdict(list)
+    by_provider: dict[str, list] = defaultdict(list)
     order: dict[str, list[str]] = defaultdict(list)
-
     for m in models:
-        hit = store.cached(keys[m]) if use_cache else None
-        if hit:
-            results[m] = hit
-        else:
-            mock_text = f"Mock answer from {m}." if mock else None
-            to_call[provider(m)].append(acall_model(m, prompt, system=system, mock_response=mock_text, **settings))
-            order[provider(m)].append(m)
-
-    fresh = await gather_limited(to_call)
-    called = [m for p in to_call for m in order[p]]
-    results.update(zip(called, fresh))
-
-    for m in models:
-        r = results[m]
-        if r.cost_usd is None and not r.error and m in prices:
-            p = prices[m]
-            r.cost_usd = (r.input_tokens * p["input"] + r.output_tokens * p["output"]) / 1_000_000
-        store.log(run_id, keys[m], key_settings, r)
+        by_provider[provider(m)].append(cached_call(
+            m, prompt, system=system, settings=settings, store=store, run_id=run_id,
+            mock_text=f"Mock answer from {m}." if mock else None, use_cache=use_cache, prices=prices,
+        ))
+        order[provider(m)].append(m)
+    results = dict(zip([m for p in by_provider for m in order[p]], await gather_limited(by_provider)))
     return [results[m] for m in models]
 
 

@@ -1081,6 +1081,7 @@ name = "model-bench"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "jinja2" },
     { name = "litellm" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -1093,6 +1094,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jinja2", specifier = ">=3.1" },
     { name = "litellm", specifier = ">=1.70" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
