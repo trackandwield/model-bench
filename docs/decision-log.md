@@ -63,3 +63,11 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 - **Found:** the first tricky-case run flagged Claude for "10,000 contacts" when the profile said "10k contacts". A false positive.
 - **Fix:** numbers and prices are compared by value (10k = 10,000, $1.2M = $1,200,000), with percentages kept distinct (40% is not 40).
 - **Still flagged, on purpose:** numbers a model *calculated* (a $100/agent price turned into "$28,800 a year for 20 agents"). Arithmetic on source facts isn't invention, but it's an unsourced claim a rep would repeat, so it goes to the judge to decide.
+
+## 2026-10-15: LLM judge, one call per metric, cross-family
+- **Options:** one call scoring all criteria; one call per criterion; pairwise (A vs B) comparisons.
+- **Why one call per criterion:** with a single call, a strong section lifts the scores of weak ones (a halo effect), and the reasoning gets thin. Three metrics means three calls per output, which is affordable at battlecard length.
+- **Why scores, not pairwise:** scores give an absolute bar ("at least 4 on invented facts") that matches the locked metrics. Pairwise comparison, with sides shuffled to control position bias, belongs in the human blind review, which calibrates this judge.
+- **Cross-family judges:** Claude Sonnet 5.5 judges every non-Anthropic output and GPT-5.6 judges Claude's, so no model scores its own family.
+- **Evidence before score:** the judge must quote the output and reason before it scores. Quotes are checked against the output, because a judge can invent evidence the same way a writer invents facts.
+- **Rubrics live in metrics.yaml**, so they're covered by the same lock as the weights and pass bars. Changing a rubric after seeing scores would be moving the goalposts.

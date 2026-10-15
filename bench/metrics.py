@@ -53,6 +53,8 @@ def validate(spec: dict) -> list[str]:
             problems.append(f"{name}: missing description")
         if m.get("type") == "check" and m.get("check") not in CHECKS:
             problems.append(f"{name}: check must name one of {sorted(CHECKS)}")
+        if m.get("type") == "judge" and sorted((m.get("rubric") or {}).keys()) != [1, 2, 3, 4, 5]:
+            problems.append(f"{name}: judge metrics need a rubric describing scores 1 to 5")
     for d in spec.get("diagnostics") or []:
         if d.get("check", d.get("name")) not in CHECKS:
             problems.append(f"diagnostic {d.get('name')}: unknown check")

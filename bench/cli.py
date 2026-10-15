@@ -9,7 +9,7 @@ from pathlib import Path
 import litellm
 from dotenv import load_dotenv
 
-from bench import checks, compare, dataset, metrics, tasks, workflow
+from bench import checks, compare, dataset, judge, metrics, tasks, workflow
 from bench.models import call_model, load_config
 
 
@@ -157,6 +157,66 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_judge(args: argparse.Namespace) -> int:
+    """Score an earlier run's outputs with the LLM judge and save the scores into its file."""
+    path = Path(args.file)
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    task_name = rows[0]["task"]
+    spec = metrics.load(task_name)
+    judge_specs = judge.judge_metrics(spec)
+    if not judge_specs:
+        print(f"{task_name} has no judge metrics.")
+        return 1
+    config = load_config()
+    judges = args.judge or config.get("judges") or []
+    settings = {k: (config.get("judge_settings") or {}).get(k, d) for k, d in (("temperature", 0), ("max_tokens", 4096))}
+    cases = {c["id"]: c for c in dataset.load(task_name)}
+    todo = sum(1 for r in rows if r.get("output") is not None)
+    print(f"Judging {todo} output(s) × {len(judge_specs)} metric(s) with {', '.join(judges)}"
+          f"{' (mocked)' if args.mock else ''}; {args.repeat} repeat(s) for consistency")
+    run_id, first, repeats = judge.run(rows, spec, judges, cases, settings=settings, mock=args.mock,
+                                       use_cache=not args.no_cache, repeat_sample=args.repeat)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    names = [m["name"] for m in judge_specs]
+    models = list(dict.fromkeys(r["model"] for r in rows))
+    short = {m: m.split("/")[-1][:18] for m in models}
+    width = max(len(n) for n in names + ["judge metric"])
+    print(f"\n{'avg score (passed/judged)':<{width}}  " + "  ".join(f"{short[m]:>18}" for m in models))
+    for n in names:
+        cells = []
+        for m in models:
+            js = [r["judge"][n] for r in rows if r["model"] == m and n in r.get("judge", {})]
+            scored = [j for j in js if j["score"] is not None]
+            if not scored:
+                cells.append("-")
+                continue
+            avg = sum(j["score"] for j in scored) / len(scored)
+            cells.append(f"{avg:.1f} ({sum(bool(j['passed']) for j in scored)}/{len(scored)})")
+        print(f"{n:<{width}}  " + "  ".join(f"{c:>18}" for c in cells))
+
+    errors = [(rows[i], j) for i, j in first if j.error]
+    for row, j in errors[:3]:
+        print(f"\n{row['model']} {row['case_id']} {j.metric}: judge failed: {j.error}")
+    worst = sorted(((rows[i], j) for i, j in first if j.score is not None), key=lambda x: x[1].score)[:3]
+    if worst:
+        print("\nLowest scores, with the judge's reasoning:")
+    for row, j in worst:
+        print(f"  {row['model']} {row['case_id']} {j.metric} = {j.score}: {j.reasoning}")
+        for q in j.evidence[:2]:
+            print(f"    quoted: \"{q}\"")
+    unquoted = sum(1 for _, j in first if j.missing_quotes)
+    if unquoted:
+        print(f"\n{unquoted} judgment(s) quoted text that isn't in the output; check those by hand.")
+
+    c = judge.consistency(first, repeats)
+    if c:
+        print(f"\nConsistency: judged {c['pairs']} again; same score {c['exact']:.0%}, within 1 point {c['within_1']:.0%}")
+    known = [j.cost_usd for _, j in first + repeats if j.cost_usd is not None]
+    print(f"\njudge run {run_id}: cost ${sum(known):.6f}; scores saved into {path}")
+    return 1 if first and all(j.error for _, j in first) else 0
+
+
 def cmd_lock(args: argparse.Namespace) -> int:
     try:
         record = metrics.lock(args.task)
@@ -206,6 +266,14 @@ def build_parser() -> argparse.ArgumentParser:
     chk = sub.add_parser("check", help="Re-run the automatic checks on an earlier run's .jsonl file (free).")
     chk.add_argument("file")
     chk.set_defaults(func=cmd_check)
+
+    jdg = sub.add_parser("judge", help="Score an earlier run's outputs with the LLM judge.")
+    jdg.add_argument("file", help="A run file, runs/<run id>-<task>.jsonl")
+    jdg.add_argument("--judge", action="append", help="Judge model id (repeatable); defaults to `judges` in models.yaml.")
+    jdg.add_argument("--repeat", type=int, default=5, help="Judge this many random outputs twice to check consistency.")
+    jdg.add_argument("--mock", action="store_true", help="Skip the network; canned verdicts.")
+    jdg.add_argument("--no-cache", action="store_true", help="Call the judge even if an identical call is cached.")
+    jdg.set_defaults(func=cmd_judge)
 
     lock = sub.add_parser("lock", help="Validate a task's metrics.yaml and record its hash.")
     lock.add_argument("task")

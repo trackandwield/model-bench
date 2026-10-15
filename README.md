@@ -18,7 +18,7 @@ Marketing teams pick an AI model by gut feel or by a public leaderboard that tes
 | Milestone | State |
 |---|---|
 | 1. Foundations: setup, locked metrics, test set | Built; metrics awaiting PMM review |
-| 2. Engine: model layer, tasks, checks, judge, runs | Model layer, task workflows and automatic checks built |
+| 2. Engine: model layer, tasks, checks, judge, runs | Model layer, task workflows, automatic checks and LLM judge built |
 | 3. Human review and analysis | Not started |
 | 4. Web app and write-up | Not started |
 
@@ -37,6 +37,7 @@ uv run python -m bench compare --mock --prompt "..."   # no keys, no cost
 uv run python -m bench run battlecard --limit 1   # one case on every model first
 uv run python -m bench run battlecard            # all 20 cases × every model
 uv run python -m bench check runs/<run id>-battlecard.jsonl   # re-run checks on an old run, free
+uv run python -m bench judge runs/<run id>-battlecard.jsonl   # score it with the LLM judge
 uv run python -m bench lock battlecard
 uv run python -m bench verify battlecard
 uv run pytest
@@ -51,6 +52,19 @@ A task lives in `tasks/<task>/task.yaml`: an optional system prompt, optional re
 ## Automatic checks
 
 Every finished output gets rule-based checks, saved next to it in the run file, before any LLM judge sees it. The checks a task uses are listed in its `metrics.yaml`: scored `check` metrics (for battlecards: prices match the profiles, required sections present, 450 words or fewer) and unscored `diagnostics` (numbers not found in the profiles, banned marketing terms, reading grade). Each result carries its evidence, such as the invented price itself. `bench run` prints pass counts per model and check; `bench check` re-runs them on an earlier run's file without calling any model.
+
+## LLM judge
+
+`bench judge <run file>` scores every finished output on each `judge` metric in `metrics.yaml`, one call per output per metric, against that metric's 1 to 5 rubric. The judge replies with quoted evidence, reasoning and a score, in that order, and the scores are saved into the run file next to the checks.
+
+Known judge biases and what the bench does about them:
+
+- **Self-preference:** each output is judged by a model from a different provider (`judges` in `models.yaml`), so Claude never grades Claude.
+- **Knowing who wrote it:** the judge never sees the model name, and vendor or model names inside the output are masked.
+- **Made-up evidence:** every quote the judge gives is checked against the output; quotes that aren't there are flagged for a human.
+- **Inconsistency:** `--repeat N` judges N random outputs a second time and reports how often the score matches.
+
+Automatic checks can hand their flags to the judge (`show_checks`), so a number the checks couldn't find in the profiles gets a ruling: invented, or correctly worked out from the source.
 
 ## Repo layout
 

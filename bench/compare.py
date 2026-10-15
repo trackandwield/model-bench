@@ -30,13 +30,17 @@ async def cached_call(
     use_cache: bool = True,
     prices: dict[str, dict] | None = None,
     input_id: str | None = None,
+    cache_tag: str | None = None,
 ) -> CallResult:
     """One model call that checks the cache first, fills in configured prices, and logs the result.
 
     `mock_text` skips the network. Mocked answers get their own cache entries so
-    they're never served to a real run.
+    they're never served to a real run. `cache_tag` forces a separate cache
+    entry for a deliberate repeat of the same call.
     """
     key_settings = settings | {"mock": True} if mock_text is not None else settings
+    if cache_tag:
+        key_settings = key_settings | {"tag": cache_tag}
     key = cache_key(model, prompt, system, key_settings)
     result = store.cached(key) if use_cache else None
     if result is None:
