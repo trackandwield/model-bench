@@ -5,8 +5,8 @@ models:
     label: Claude Haiku 4.5
   - id: openai/gpt-5-mini
     label: GPT-5 mini
-  - id: gemini/gemini-2.5-flash
-    label: Gemini 2.5 Flash
+  - id: gemini/gemini-3.8-flash
+    label: Gemini 3.8 Flash
   - id: openrouter/meta-llama/llama-3.3-70b-instruct
     label: Llama 3.3 70B (open weights)
     # LiteLLM has no price for this one. Copy $ per million tokens from the

@@ -34,3 +34,7 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 
 ## 2026-10-15: SQLite call log doubles as the cache
 - **Why:** every call (model, settings, tokens, cost, latency, errors) lands in `runs/bench.db`, and an identical later call is served from it for $0. Errors are logged but never served from cache, so a rate-limited call is retried next time.
+
+## 2026-10-15: Gemini 2.5 Flash → Gemini 3.8 Flash
+- **Found:** the first real run failed because Google no longer serves `gemini-2.5-flash` to new API users.
+- **Why it matters:** model ids expire within months, so every run records the exact ids it used, and the README results carry a test date.

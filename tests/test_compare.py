@@ -8,7 +8,7 @@ from bench.models import CallResult
 from bench.store import Store
 
 ORIGINAL_ACALL = compare_mod.acall_model
-MODELS = ["anthropic/claude-haiku-4-5", "openai/gpt-5-mini", "gemini/gemini-2.5-flash"]
+MODELS = ["anthropic/claude-haiku-4-5", "openai/gpt-5-mini", "gemini/gemini-3.8-flash"]
 SETTINGS = {"temperature": 0.2, "max_tokens": 256}
 
 
