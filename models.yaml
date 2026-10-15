@@ -9,6 +9,11 @@ models:
     label: Gemini 2.5 Flash
   - id: openrouter/meta-llama/llama-3.3-70b-instruct
     label: Llama 3.3 70B (open weights)
+    # LiteLLM has no price for this one. Copy $ per million tokens from the
+    # model's page on openrouter.ai, or cost shows as "unknown".
+    price_per_mtok:
+      input: null
+      output: null
 
 # Held constant across every model so the comparison is fair.
 settings:
