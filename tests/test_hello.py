@@ -13,3 +13,18 @@ def test_hello_command_runs_mocked(capsys):
     assert main(["hello", "--mock"]) == 0
     out = capsys.readouterr().out
     assert "cost:" in out and "mocked" in out
+
+
+def test_format_error_keeps_multiline_provider_message():
+    from bench.models import format_error
+
+    e = ValueError('GeminiException - {\n  "error": {\n    "message": "models/x is not found"\n  }\n}')
+    assert format_error(e) == "ValueError: models/x is not found"
+    assert "\n" not in format_error(e)
+
+
+def test_format_error_drops_embedded_traceback():
+    from bench.models import format_error
+
+    e = ValueError('Missing key.\nTraceback (most recent call last):\n  File "x.py", line 1')
+    assert format_error(e) == "ValueError: Missing key."

@@ -7,7 +7,7 @@ import argparse
 import litellm
 from dotenv import load_dotenv
 
-from bench import metrics
+from bench import compare, metrics
 from bench.models import call_model, load_config
 
 
@@ -34,6 +34,38 @@ def cmd_hello(args: argparse.Namespace) -> int:
     print(f"cost:    {cost}")
     print(f"latency: {result.latency_s:.2f}s")
     return 0
+
+
+def _money(v: float | None) -> str:
+    return "unknown" if v is None else f"${v:.6f}"
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    config = load_config()
+    models = args.model or [m["id"] for m in config["models"]]
+    settings = {k: config.get("settings", {}).get(k, d) for k, d in (("temperature", 0.2), ("max_tokens", 1024))}
+    prices = {
+        m["id"]: m["price_per_mtok"]
+        for m in config["models"]
+        if all(isinstance((m.get("price_per_mtok") or {}).get(k), (int, float)) for k in ("input", "output"))
+    }
+    run_id, results, path = compare.run(
+        models, args.prompt, system=args.system, settings=settings, mock=args.mock,
+        use_cache=not args.no_cache, prices=prices,
+    )
+
+    width = max(len(m) for m in models)
+    print(f"{'model':<{width}}  {'tokens in/out':>13}  {'cost':>11}  {'latency':>8}  status")
+    for r in results:
+        status = "error" if r.error else "refused" if r.refused else "cached" if r.cached else "ok"
+        tokens = f"{r.input_tokens}/{r.output_tokens}"
+        print(f"{r.model:<{width}}  {tokens:>13}  {_money(r.cost_usd):>11}  {r.latency_s:>7.2f}s  {status}")
+    for r in results:
+        if r.error:
+            print(f"\n{r.model} failed: {r.error}")
+    known = [r.cost_usd for r in results if r.cost_usd is not None]
+    print(f"\nrun {run_id}: total cost ${sum(known):.6f}; outputs in {path}")
+    return 1 if all(r.error for r in results) else 0
 
 
 def cmd_lock(args: argparse.Namespace) -> int:
@@ -64,6 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
     hello.add_argument("--prompt", default="In one sentence, what does a product marketing manager do?")
     hello.add_argument("--mock", action="store_true", help="Skip the network and the API key; returns canned text.")
     hello.set_defaults(func=cmd_hello)
+
+    cmp = sub.add_parser("compare", help="Run one prompt on every model in models.yaml.")
+    cmp.add_argument("--prompt", required=True)
+    cmp.add_argument("--system", help="Optional system prompt, the same for every model.")
+    cmp.add_argument("--model", action="append", help="Limit to this model id (repeatable).")
+    cmp.add_argument("--mock", action="store_true", help="Skip the network; canned answers per model.")
+    cmp.add_argument("--no-cache", action="store_true", help="Call the models even if an identical call is cached.")
+    cmp.set_defaults(func=cmd_compare)
 
     lock = sub.add_parser("lock", help="Validate a task's metrics.yaml and record its hash.")
     lock.add_argument("task")
