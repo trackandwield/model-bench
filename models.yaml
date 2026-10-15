@@ -18,4 +18,6 @@ models:
 # Held constant across every model so the comparison is fair.
 settings:
   temperature: 0.2
-  max_tokens: 1024
+  # Reasoning models spend hidden "thinking" tokens from this budget too, so
+  # leave headroom: a one-page battlecard can need 4k+ on some models.
+  max_tokens: 4096

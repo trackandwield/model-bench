@@ -7,7 +7,7 @@ import argparse
 import litellm
 from dotenv import load_dotenv
 
-from bench import compare, metrics
+from bench import compare, dataset, metrics, tasks, workflow
 from bench.models import call_model, load_config
 
 
@@ -40,7 +40,8 @@ def _money(v: float | None) -> str:
     return "unknown" if v is None else f"${v:.6f}"
 
 
-def cmd_compare(args: argparse.Namespace) -> int:
+def _run_config(args: argparse.Namespace) -> tuple[list[str], dict, dict]:
+    """Models, shared settings and configured prices from models.yaml (and --model)."""
     config = load_config()
     models = args.model or [m["id"] for m in config["models"]]
     settings = {k: config.get("settings", {}).get(k, d) for k, d in (("temperature", 0.2), ("max_tokens", 1024))}
@@ -49,6 +50,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
         for m in config["models"]
         if all(isinstance((m.get("price_per_mtok") or {}).get(k), (int, float)) for k in ("input", "output"))
     }
+    return models, settings, prices
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    models, settings, prices = _run_config(args)
     run_id, results, path = compare.run(
         models, args.prompt, system=args.system, settings=settings, mock=args.mock,
         use_cache=not args.no_cache, prices=prices,
@@ -66,6 +72,43 @@ def cmd_compare(args: argparse.Namespace) -> int:
     known = [r.cost_usd for r in results if r.cost_usd is not None]
     print(f"\nrun {run_id}: total cost ${sum(known):.6f}; outputs in {path}")
     return 1 if all(r.error for r in results) else 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    models, settings, prices = _run_config(args)
+    task = tasks.load(args.task)
+    cases = dataset.load(args.task)
+    if args.case:
+        wanted = set(args.case)
+        cases = [c for c in cases if c["id"] in wanted]
+        missing = wanted - {c["id"] for c in cases}
+        if missing:
+            print(f"Unknown case ids: {', '.join(sorted(missing))}")
+            return 1
+    if args.limit:
+        cases = cases[: args.limit]
+
+    print(f"{task.name}: {task.kind} with {len(task.steps)} step(s) × {len(cases)} case(s) × {len(models)} model(s)")
+    run_id, results, path = workflow.run(task, cases, models, settings=settings, mock=args.mock,
+                                         use_cache=not args.no_cache, prices=prices)
+
+    width = max(len(m) for m in models)
+    print(f"\n{'model':<{width}}  {'ok':>7}  {'cost':>11}  {'avg latency':>11}  failed at")
+    for m in models:
+        rows = [r for r in results if r.model == m]
+        ok = sum(1 for r in rows if not r.failed_step)
+        costs = [r.cost_usd for r in rows if r.cost_usd is not None]
+        cost = _money(sum(costs)) if len(costs) == len(rows) else "unknown"
+        avg = sum(r.latency_s for r in rows) / len(rows)
+        fails = sorted({r.failed_step for r in rows if r.failed_step})
+        print(f"{m:<{width}}  {ok:>3}/{len(rows):<3}  {cost:>11}  {avg:>10.2f}s  {', '.join(fails) or '-'}")
+    for r in results:
+        if r.failed_step:
+            err = next(s.error for s in r.steps if s.error)
+            print(f"\n{r.model} on {r.case_id} failed at {r.failed_step}: {err}")
+            break
+    print(f"\nrun {run_id}: outputs and every step's prompt in {path}")
+    return 1 if all(r.failed_step for r in results) else 0
 
 
 def cmd_lock(args: argparse.Namespace) -> int:
@@ -104,6 +147,15 @@ def build_parser() -> argparse.ArgumentParser:
     cmp.add_argument("--mock", action="store_true", help="Skip the network; canned answers per model.")
     cmp.add_argument("--no-cache", action="store_true", help="Call the models even if an identical call is cached.")
     cmp.set_defaults(func=cmd_compare)
+
+    run = sub.add_parser("run", help="Run a task on every model × its test cases.")
+    run.add_argument("task", help="Folder under tasks/, e.g. battlecard")
+    run.add_argument("--case", action="append", help="Only this case id (repeatable).")
+    run.add_argument("--limit", type=int, help="Only the first N cases.")
+    run.add_argument("--model", action="append", help="Limit to this model id (repeatable).")
+    run.add_argument("--mock", action="store_true", help="Skip the network; canned answers.")
+    run.add_argument("--no-cache", action="store_true", help="Call the models even if an identical call is cached.")
+    run.set_defaults(func=cmd_run)
 
     lock = sub.add_parser("lock", help="Validate a task's metrics.yaml and record its hash.")
     lock.add_argument("task")
