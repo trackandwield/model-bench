@@ -6,7 +6,7 @@ status: draft            # change to "reviewed" once the PMM has signed off
 reviewed_by: null        # who signed off
 version: 1
 
-# type: check       = automatic rule, pass/fail
+# type: check       = automatic rule, pass/fail; `check` names a rule in bench/checks.py
 #       judge       = LLM judge scores 1-5 against the rubric
 #       human       = scored by a person in the blind review screen
 #       operational = cost or latency, measured, not judged
@@ -21,6 +21,7 @@ metrics:
   - name: pricing_matches_source
     description: Any price stated matches the profile exactly; if the profile has no price, none is given.
     type: check
+    check: prices_in_source
     weight: 0.15
     pass: "true"
   - name: specific_differentiators
@@ -41,13 +42,30 @@ metrics:
   - name: required_sections
     description: Has overview, differentiators, pricing, objection handlers and landmines sections.
     type: check
+    check: required_sections
+    args:
+      sections: [Overview, Differentiators, Pricing, Objection handlers, Landmines]
     weight: 0.05
     pass: "true"
   - name: one_page
     description: Fits on one page.
     type: check
+    check: max_words
+    args:
+      limit: 450
     weight: 0.05
     pass: "<= 450 words"
+
+# Automatic checks reported for every output but not part of the weighted
+# score. They flag things for the judge and for the "why" analysis.
+diagnostics:
+  - name: unsourced_numbers   # numbers in the card that aren't in the profiles
+  - name: banned_terms
+    args:
+      terms: [revolutionary, game-changer, world-class, cutting-edge, seamless, best-in-class, synergy]
+  - name: reading_grade       # Flesch-Kincaid grade level
+    args:
+      max_grade: 12
 
 # Reported alongside quality, not part of the weighted score.
 operational:

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 
 import litellm
 from dotenv import load_dotenv
 
-from bench import compare, dataset, metrics, tasks, workflow
+from bench import checks, compare, dataset, metrics, tasks, workflow
 from bench.models import call_model, load_config
 
 
@@ -88,9 +90,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.limit:
         cases = cases[: args.limit]
 
+    specs = checks.check_specs(metrics.load(args.task))
     print(f"{task.name}: {task.kind} with {len(task.steps)} step(s) × {len(cases)} case(s) × {len(models)} model(s)")
     run_id, results, path = workflow.run(task, cases, models, settings=settings, mock=args.mock,
-                                         use_cache=not args.no_cache, prices=prices)
+                                         use_cache=not args.no_cache, prices=prices, check_specs=specs)
 
     width = max(len(m) for m in models)
     print(f"\n{'model':<{width}}  {'ok':>7}  {'cost':>11}  {'avg latency':>11}  failed at")
@@ -107,8 +110,51 @@ def cmd_run(args: argparse.Namespace) -> int:
             err = next(s.error for s in r.steps if s.error)
             print(f"\n{r.model} on {r.case_id} failed at {r.failed_step}: {err}")
             break
-    print(f"\nrun {run_id}: outputs and every step's prompt in {path}")
+    _print_checks(models, results, [s["name"] for s in specs])
+    print(f"\nrun {run_id}: outputs, checks and every step's prompt in {path}")
     return 1 if all(r.failed_step for r in results) else 0
+
+
+def _print_checks(models: list[str], results, names: list[str]) -> None:
+    """Pass counts per model per check, then the first few failures as evidence."""
+    if not names:
+        return
+    width = max(len(n) for n in names)
+    short = {m: m.split("/")[-1][:18] for m in models}
+    print(f"\n{'check (passed/checked)':<{width}}  " + "  ".join(f"{short[m]:>18}" for m in models))
+    for n in names:
+        cells = []
+        for m in models:
+            checked = [r.checks[n] for r in results if r.model == m and n in r.checks]
+            cells.append(f"{sum(c.passed for c in checked)}/{len(checked)}" if checked else "-")
+        print(f"{n:<{width}}  " + "  ".join(f"{c:>18}" for c in cells))
+    shown = 0
+    for r in results:
+        for n, c in r.checks.items():
+            if not c.passed and c.detail and shown < 5:
+                print(f"  {r.model} {r.case_id} {n}: {', '.join(map(str, c.detail))}")
+                shown += 1
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    """Re-run the automatic checks on an earlier run's file. No model calls, no cost."""
+    path = Path(args.file)
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    task_name = rows[0]["task"]
+    specs = checks.check_specs(metrics.load(task_name))
+    cases = {c["id"]: c for c in dataset.load(task_name)}
+    results = []
+    for row in rows:
+        r = workflow.CaseResult(row["model"], row["case_id"])
+        if row.get("output") is not None:
+            r.checks = checks.run_checks(row["output"], cases[row["case_id"]]["inputs"], specs)
+        row["checks"] = {k: v.to_dict() for k, v in r.checks.items()}
+        results.append(r)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    models = list(dict.fromkeys(row["model"] for row in rows))
+    _print_checks(models, results, [s["name"] for s in specs])
+    print(f"\nchecks saved into {path}")
+    return 0
 
 
 def cmd_lock(args: argparse.Namespace) -> int:
@@ -156,6 +202,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--mock", action="store_true", help="Skip the network; canned answers.")
     run.add_argument("--no-cache", action="store_true", help="Call the models even if an identical call is cached.")
     run.set_defaults(func=cmd_run)
+
+    chk = sub.add_parser("check", help="Re-run the automatic checks on an earlier run's .jsonl file (free).")
+    chk.add_argument("file")
+    chk.set_defaults(func=cmd_check)
 
     lock = sub.add_parser("lock", help="Validate a task's metrics.yaml and record its hash.")
     lock.add_argument("task")

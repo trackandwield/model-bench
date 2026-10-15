@@ -50,3 +50,16 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 ## 2026-10-15: max_tokens 4096, and cut-off output counts as a failure
 - **Found:** Gemini used 645 output tokens on a one-line tagline, mostly hidden reasoning. At the old 1024 limit a full battlecard would likely be cut off on reasoning models.
 - **Why:** a truncated extract would silently feed half the facts into the draft step, so a `length` finish is reported as the step where the chain broke.
+
+## 2026-10-15: automatic checks before any LLM judge
+- **Why:** anything a rule can catch (an invented price, a missing section, a card over one page) is caught for free and with evidence, so the paid judge only scores what needs judgment.
+- **Invented facts, rough version:** flag any dollar amount or number in the card that never appears in the profiles. It misses invented claims with no number in them; that's left to the judge.
+
+## 2026-10-15: own Flesch-Kincaid instead of textstat
+- **Found:** the current textstat release downloads an NLTK dictionary on first use, which fails behind proxies and adds a setup step on every machine.
+- **Why:** the formula is three lines plus a syllable estimate. A grade that's off by half a point doesn't change any conclusion; a setup failure blocks the whole run.
+
+## 2026-10-15: compare number values, not strings
+- **Found:** the first tricky-case run flagged Claude for "10,000 contacts" when the profile said "10k contacts". A false positive.
+- **Fix:** numbers and prices are compared by value (10k = 10,000, $1.2M = $1,200,000), with percentages kept distinct (40% is not 40).
+- **Still flagged, on purpose:** numbers a model *calculated* (a $100/agent price turned into "$28,800 a year for 20 agents"). Arithmetic on source facts isn't invention, but it's an unsourced claim a rep would repeat, so it goes to the judge to decide.
