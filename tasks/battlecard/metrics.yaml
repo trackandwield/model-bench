@@ -1,0 +1,55 @@
+# DRAFT: success metrics for the battlecard task.
+# Written as a starting point; the PMM rewrites the criteria in her own words,
+# then run `python -m bench lock battlecard` before any model runs.
+task: battlecard
+status: draft            # change to "reviewed" once the PMM has signed off
+reviewed_by: null        # who signed off
+version: 1
+
+# type: check       = automatic rule, pass/fail
+#       judge       = LLM judge scores 1-5 against the rubric
+#       human       = scored by a person in the blind review screen
+#       operational = cost or latency, measured, not judged
+# weight: share of the overall score; weights must add up to 1.0
+# pass: the bar an output must clear on this metric
+metrics:
+  - name: no_invented_facts
+    description: Makes no claim, number or feature that isn't in the company profile.
+    type: judge
+    weight: 0.30
+    pass: ">= 4"
+  - name: pricing_matches_source
+    description: Any price stated matches the profile exactly; if the profile has no price, none is given.
+    type: check
+    weight: 0.15
+    pass: "true"
+  - name: specific_differentiators
+    description: Three differentiators, each tied to a concrete proof point rather than "better UX".
+    type: judge
+    weight: 0.20
+    pass: ">= 4"
+  - name: objection_handling
+    description: Each objection handler answers the actual objection a buyer would raise.
+    type: judge
+    weight: 0.15
+    pass: ">= 3"
+  - name: rep_ready
+    description: A sales rep could use it on a call today without rewriting it.
+    type: human
+    weight: 0.10
+    pass: ">= 4"
+  - name: required_sections
+    description: Has overview, differentiators, pricing, objection handlers and landmines sections.
+    type: check
+    weight: 0.05
+    pass: "true"
+  - name: one_page
+    description: Fits on one page.
+    type: check
+    weight: 0.05
+    pass: "<= 450 words"
+
+# Reported alongside quality, not part of the weighted score.
+operational:
+  - name: cost_per_output
+  - name: latency
