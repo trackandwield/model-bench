@@ -41,7 +41,7 @@ uv run python -m bench run battlecard --repeats 3              # the full run: 4
 uv run python -m bench run --resume runs/<run id>-battlecard.config.json   # finish a crashed run
 uv run python -m bench check runs/<run id>-battlecard.jsonl   # re-run checks on an old run, free
 uv run python -m bench judge runs/<run id>-battlecard.jsonl --estimate   # judging cost only, no calls
-uv run python -m bench judge runs/<run id>-battlecard.jsonl --sample 30  # judge 30 random cards
+uv run python -m bench judge runs/<run id>-battlecard.jsonl --sample 5  # judge 5 random cards per model
 uv run python -m bench judge runs/<run id>-battlecard.jsonl              # judge every card
 uv run python -m bench analyze runs/<run id>-battlecard.jsonl   # scorecard, where, consistency, recommendation (free)
 uv run python -m bench analyze runs/<run id>-battlecard.jsonl --patterns   # plus failure patterns (one judge call per model)
@@ -77,7 +77,7 @@ Known judge biases and what the bench does about them:
 - **Made-up evidence:** every quote the judge gives is checked against the output; quotes that aren't there are flagged for a human.
 - **Inconsistency:** `--repeat N` judges N random outputs a second time and reports how often the score matches.
 
-Judging costs more than writing: every card gets one judge call per metric, from a stronger model. So `bench judge` estimates its cost first and holds to the same budget as runs (`budget_usd`, or `--budget`). `--sample N` judges N random cards; judgments are cached, so judging the rest later only pays for the new ones.
+Judging costs more than writing: every card gets one judge call per metric, from a stronger model. So `bench judge` estimates its cost first and holds to the same budget as runs (`budget_usd`, or `--budget`). `--sample N` judges N random cards per model, so every model has judge scores to rank on; judgments are cached, so judging the rest later only pays for the new ones.
 
 Automatic checks can hand their flags to the judge (`show_checks`), so a number the checks couldn't find in the profiles gets a ruling: invented, or correctly worked out from the source.
 

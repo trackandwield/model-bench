@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 from pathlib import Path
 
 import litellm
@@ -48,12 +49,16 @@ def _run_config(args: argparse.Namespace) -> tuple[list[str], dict, dict]:
     config = load_config()
     models = args.model or [m["id"] for m in config["models"]]
     settings = {k: config.get("settings", {}).get(k, d) for k, d in (("temperature", 0.2), ("max_tokens", 1024))}
-    prices = {
+    return models, settings, _prices(config)
+
+
+def _prices(config: dict) -> dict[str, dict]:
+    """$ per million tokens for models whose price is filled in under price_per_mtok."""
+    return {
         m["id"]: m["price_per_mtok"]
-        for m in config["models"]
+        for m in config.get("models", [])
         if all(isinstance((m.get("price_per_mtok") or {}).get(k), (int, float)) for k in ("input", "output"))
     }
-    return models, settings, prices
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
@@ -225,9 +230,8 @@ def cmd_judge(args: argparse.Namespace) -> int:
     settings = {k: (config.get("judge_settings") or {}).get(k, d) for k, d in (("temperature", 0), ("max_tokens", 4096))}
     cases = {c["id"]: c for c in dataset.load(task_name)}
     budget = args.budget if args.budget is not None else config.get("budget_usd")
-    todo = sum(1 for r in rows if r.get("output") is not None)
-    if args.sample is not None:
-        todo = min(todo, args.sample)
+    done = Counter(r["model"] for r in rows if r.get("output") is not None)
+    todo = sum(min(n, args.sample) if args.sample is not None else n for n in done.values())
     print(f"Judging {todo} output(s) × {len(judge_specs)} metric(s) with {', '.join(judges)}"
           f"{' (mocked)' if args.mock else ''}; {args.repeat} repeat(s) for consistency")
     store = Store()
@@ -239,7 +243,7 @@ def cmd_judge(args: argparse.Namespace) -> int:
         return 0
     if budget is not None and est.cost_usd > budget:
         print(f"\nNot judged: the estimate is over the ${budget:.2f} budget. Rerun with --budget "
-              f"{est.cost_usd * 1.2:.2f} (or more), or judge a sample with --sample N.")
+              f"{est.cost_usd * 1.2:.2f} (or more), or judge a sample with --sample N (per model).")
         return 1
     cap = workflow.Budget(budget)
     run_id, first, repeats = judge.run(rows, spec, judges, cases, budget=cap, **opts)
@@ -295,6 +299,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     task_name = rows[0]["task"]
     spec = metrics.load(task_name)
     cases = {c["id"]: c for c in dataset.load(task_name)}
+    analyze.fill_prices(rows, _prices(load_config()))  # a price added after the run still counts
     result = analyze.analyze(rows, spec, cases)
 
     if args.patterns:
@@ -383,7 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
     jdg.add_argument("file", help="A run file, runs/<run id>-<task>.jsonl")
     jdg.add_argument("--judge", action="append", help="Judge model id (repeatable); defaults to `judges` in models.yaml.")
     jdg.add_argument("--repeat", type=int, default=5, help="Judge this many random outputs twice to check consistency.")
-    jdg.add_argument("--sample", type=int, help="Judge only this many random outputs.")
+    jdg.add_argument("--sample", type=int, help="Judge only this many random outputs per model.")
     jdg.add_argument("--budget", type=float, help="Spend cap in USD; defaults to budget_usd in models.yaml.")
     jdg.add_argument("--estimate", action="store_true", help="Print the cost estimate and stop.")
     jdg.add_argument("--mock", action="store_true", help="Skip the network; canned verdicts.")

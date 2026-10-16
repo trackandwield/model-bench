@@ -162,3 +162,10 @@ def test_quotes_joined_with_ellipses_or_curly_apostrophes_still_count():
     texts = (judge._norm("We need strong Kubernetes views. Some text. While they're strong, we unify logs."),)
     assert judge.quote_found('"We need strong Kubernetes views." ... "While they’re strong"', texts)
     assert not judge.quote_found("We need strong Kubernetes views … and 900 customers", texts)
+
+
+def test_sample_is_per_model_so_every_model_gets_judged(store):
+    rows = rows_for(["openai/gpt-5-mini"] * 6 + ["anthropic/claude-haiku-4-5"] * 2)
+    judge.run(rows, metrics.load("battlecard"), JUDGES, cases(), settings=SETTINGS, store=store, mock=True, sample=3)
+    judged = [r["model"] for r in rows if "judge" in r]
+    assert judged.count("openai/gpt-5-mini") == 3 and judged.count("anthropic/claude-haiku-4-5") == 2

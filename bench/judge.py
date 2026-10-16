@@ -192,11 +192,15 @@ async def judge_one(row: dict, metric: dict, judge_model: str, *, inputs: dict, 
 def plan_jobs(rows: list[dict], metrics: list[dict], judges: list[str], *, repeat_sample: int = 0,
               sample: int | None = None, seed: int = 0) -> tuple[list[tuple], list[tuple]]:
     """(row index, metric, judge model) for every finished output, and the random
-    subset judged a second time. `sample` limits judging to that many random outputs."""
+    subset judged a second time. `sample` limits judging to that many random outputs
+    per model, so every model gets enough judged outputs to be compared."""
     finished = [i for i, row in enumerate(rows) if row.get("output") is not None]  # failed chains have nothing to judge
     rng = random.Random(seed)
-    if sample is not None and sample < len(finished):
-        finished = sorted(rng.sample(finished, sample))
+    if sample is not None:
+        by_model: dict[str, list[int]] = defaultdict(list)
+        for i in finished:
+            by_model[rows[i]["model"]].append(i)
+        finished = sorted(i for idx in by_model.values() for i in rng.sample(idx, min(sample, len(idx))))
     jobs = [(i, m, pick_judge(rows[i]["model"], judges)) for i in finished for m in metrics]
     return jobs, rng.sample(jobs, min(repeat_sample, len(jobs)))
 
