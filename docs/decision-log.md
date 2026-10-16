@@ -71,3 +71,10 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 - **Cross-family judges:** Claude Sonnet 5.5 judges every non-Anthropic output and GPT-5.6 judges Claude's, so no model scores its own family.
 - **Evidence before score:** the judge must quote the output and reason before it scores. Quotes are checked against the output, because a judge can invent evidence the same way a writer invents facts.
 - **Rubrics live in metrics.yaml**, so they're covered by the same lock as the weights and pass bars. Changing a rubric after seeing scores would be moving the goalposts.
+
+## 2026-10-15: run orchestration on top of the call cache
+- **Resumable without a job queue:** every finished call is already committed to SQLite, so a resumed run replays the same plan and the cache answers whatever finished. No separate checkpoint state to keep in sync.
+- **Repeats are fresh calls:** repeat 2 and 3 get their own cache entries; repeat 1 shares the normal cache, so earlier single runs count as repeat 1.
+- **Estimate errs high:** rough token counts (4 characters a token, no tokenizer download) and a 1,500-token default output for models with no history, because reasoning models spend hidden tokens. Once a model has run, its real average output length is used.
+- **Budget is a hard stop, with a small overshoot:** once spent reaches the cap, no new call starts; calls already in flight (up to 4 per provider) still finish.
+- **Not recorded yet:** the exact snapshot a provider served behind an alias like `claude-haiku-4-5`. The config records the ids and date; the served version needs a call-log column and can come later.

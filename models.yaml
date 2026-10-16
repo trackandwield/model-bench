@@ -32,3 +32,7 @@ judges:
 judge_settings:
   temperature: 0
   max_tokens: 4096
+
+# Spend cap per run, in USD. `bench run` estimates the cost first and refuses
+# to start above this; during a run, no new calls start once it's reached.
+budget_usd: 3.00

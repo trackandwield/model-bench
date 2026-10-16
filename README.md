@@ -36,6 +36,9 @@ uv run python -m bench compare --prompt "Write a tagline for an observability pr
 uv run python -m bench compare --mock --prompt "..."   # no keys, no cost
 uv run python -m bench run battlecard --limit 1   # one case on every model first
 uv run python -m bench run battlecard            # all 20 cases × every model
+uv run python -m bench run battlecard --repeats 3 --estimate   # cost estimate only, no calls
+uv run python -m bench run battlecard --repeats 3              # the full run: 4 models × 20 cases × 3
+uv run python -m bench run --resume runs/<run id>-battlecard.config.json   # finish a crashed run
 uv run python -m bench check runs/<run id>-battlecard.jsonl   # re-run checks on an old run, free
 uv run python -m bench judge runs/<run id>-battlecard.jsonl   # score it with the LLM judge
 uv run python -m bench lock battlecard
@@ -48,6 +51,12 @@ Models live in `models.yaml` as [LiteLLM](https://docs.litellm.ai/) ids, so addi
 ## Tasks
 
 A task lives in `tasks/<task>/task.yaml`: an optional system prompt, optional reference files (a brand voice guide, say) and one or more steps. One step is a plain prompt; several make a workflow, where each step's prompt can use earlier outputs as `{{ steps.<name> }}`. The battlecard task is two steps: extract the facts from the profiles, then write the card from those facts only. `bench run` records every step's prompt and output, so you can see whether a model went wrong reading the profile or embellishing while writing. A step that errors or gets cut off at `max_tokens` stops that chain and is reported as where it broke.
+
+## Runs
+
+A run is every model × every case × N repeats (`--repeats`; repeats show how much a model's answers vary from one try to the next). Before any call, `bench run` prints a cost estimate: steps already in the cache are free, input tokens come from the actual prompts, and output tokens from each model's past runs (or a generous default for a model with no history). If the estimate is over the budget (`budget_usd` in `models.yaml`, or `--budget`), the run doesn't start. During the run no new call starts once the budget is spent.
+
+Each run saves `runs/<run id>-<task>.config.json` before its first call: models, case ids, repeats, settings, hashes of the task, dataset and metrics files, whether the metrics were locked, the git commit and library versions. `--resume` reruns from that file with the same run id. Finished calls come from the cache, so after a crash, rate limit or budget stop only the missing calls are paid for. If the task, dataset or metrics changed since, it says so.
 
 ## Automatic checks
 
