@@ -40,7 +40,9 @@ uv run python -m bench run battlecard --repeats 3 --estimate   # cost estimate o
 uv run python -m bench run battlecard --repeats 3              # the full run: 4 models × 20 cases × 3
 uv run python -m bench run --resume runs/<run id>-battlecard.config.json   # finish a crashed run
 uv run python -m bench check runs/<run id>-battlecard.jsonl   # re-run checks on an old run, free
-uv run python -m bench judge runs/<run id>-battlecard.jsonl   # score it with the LLM judge
+uv run python -m bench judge runs/<run id>-battlecard.jsonl --estimate   # judging cost only, no calls
+uv run python -m bench judge runs/<run id>-battlecard.jsonl --sample 30  # judge 30 random cards
+uv run python -m bench judge runs/<run id>-battlecard.jsonl              # judge every card
 uv run python -m bench lock battlecard
 uv run python -m bench verify battlecard
 uv run pytest
@@ -72,6 +74,8 @@ Known judge biases and what the bench does about them:
 - **Knowing who wrote it:** the judge never sees the model name, and vendor or model names inside the output are masked.
 - **Made-up evidence:** every quote the judge gives is checked against the output; quotes that aren't there are flagged for a human.
 - **Inconsistency:** `--repeat N` judges N random outputs a second time and reports how often the score matches.
+
+Judging costs more than writing: every card gets one judge call per metric, from a stronger model. So `bench judge` estimates its cost first and holds to the same budget as runs (`budget_usd`, or `--budget`). `--sample N` judges N random cards; judgments are cached, so judging the rest later only pays for the new ones.
 
 Automatic checks can hand their flags to the judge (`show_checks`), so a number the checks couldn't find in the profiles gets a ruling: invented, or correctly worked out from the source.
 

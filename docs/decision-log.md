@@ -78,3 +78,7 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 - **Estimate errs high:** rough token counts (4 characters a token, no tokenizer download) and a 1,500-token default output for models with no history, because reasoning models spend hidden tokens. Once a model has run, its real average output length is used.
 - **Budget is a hard stop, with a small overshoot:** once spent reaches the cap, no new call starts; calls already in flight (up to 4 per provider) still finish.
 - **Not recorded yet:** the exact snapshot a provider served behind an alias like `claude-haiku-4-5`. The config records the ids and date; the served version needs a call-log column and can come later.
+
+## 2026-10-16: the judge gets a cost estimate and budget too
+- **Found:** judging 21 cards cost $0.70, more than writing them. A full run of 240 cards would be about $8 to judge, with no warning.
+- **Fix:** `bench judge` estimates first (cached judgments free; output length from each judge's history), refuses to start over the budget, and stops new calls once it's spent. `--sample N` judges a random subset, so a cheap sample can be checked before paying for everything.

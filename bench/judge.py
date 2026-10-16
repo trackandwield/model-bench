@@ -22,9 +22,14 @@ import re
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 
-from bench.compare import cached_call, new_run_id
+from bench import plan
+from bench.compare import cached_call, call_key, new_run_id
 from bench.models import gather_limited, provider
 from bench.store import Store
+from bench.workflow import Budget
+
+# Judge output tokens assumed per call when a judge has no history yet.
+DEFAULT_JUDGE_OUTPUT_TOKENS = 800
 
 SYSTEM = (
     "You are a strict evaluator of sales enablement content. You score one criterion at a time "
@@ -140,19 +145,28 @@ def _mock_reply(output: str, metric: str) -> str:
     return json.dumps({"evidence": [quote], "reasoning": "Mock judgment.", "score": score})
 
 
+def _tag(attempt: int) -> str | None:
+    # A repeat needs its own cache entry, or it would just return the first answer.
+    return f"repeat{attempt}" if attempt > 1 else None
+
+
 async def judge_one(row: dict, metric: dict, judge_model: str, *, inputs: dict, settings: dict, store: Store,
-                    run_id: str, mock: bool = False, use_cache: bool = True, attempt: int = 1) -> Judgment:
+                    run_id: str, mock: bool = False, use_cache: bool = True, attempt: int = 1,
+                    budget: Budget | None = None) -> Judgment:
     j = Judgment(metric["name"], judge_model)
     output = row["output"]
     prompt = build_prompt(metric, inputs, output, row.get("checks"))
+    if budget and budget.exhausted:
+        j.error = f"Budget of ${budget.limit:.2f} reached; rerun to finish (finished judgments are free)"
+        return j
     r = await cached_call(
         judge_model, prompt, system=SYSTEM, settings=settings, store=store, run_id=run_id,
         mock_text=_mock_reply(output, metric["name"]) if mock else None, use_cache=use_cache,
-        input_id=f"{row['case_id']}:{metric['name']}:judge{attempt}",
-        # A repeat needs its own cache entry, or it would just return the first answer.
-        cache_tag=f"repeat{attempt}" if attempt > 1 else None,
+        input_id=f"{row['case_id']}:{metric['name']}:judge{attempt}", cache_tag=_tag(attempt),
     )
     j.cost_usd, j.cached = r.cost_usd, r.cached
+    if budget and not mock and not r.cached:
+        budget.add(r.cost_usd)
     if r.error:
         j.error = r.error
         return j
@@ -166,22 +180,61 @@ async def judge_one(row: dict, metric: dict, judge_model: str, *, inputs: dict, 
     return j
 
 
+def plan_jobs(rows: list[dict], metrics: list[dict], judges: list[str], *, repeat_sample: int = 0,
+              sample: int | None = None, seed: int = 0) -> tuple[list[tuple], list[tuple]]:
+    """(row index, metric, judge model) for every finished output, and the random
+    subset judged a second time. `sample` limits judging to that many random outputs."""
+    finished = [i for i, row in enumerate(rows) if row.get("output") is not None]  # failed chains have nothing to judge
+    rng = random.Random(seed)
+    if sample is not None and sample < len(finished):
+        finished = sorted(rng.sample(finished, sample))
+    jobs = [(i, m, pick_judge(rows[i]["model"], judges)) for i in finished for m in metrics]
+    return jobs, rng.sample(jobs, min(repeat_sample, len(jobs)))
+
+
+def estimate(rows: list[dict], metrics: list[dict], judges: list[str], cases: dict[str, dict], *, settings: dict,
+             store: Store, mock=False, use_cache=True, repeat_sample=0, sample=None, seed=0) -> plan.Estimate:
+    """Cost of judging, before any call: cached judgments are free; the rest are sized
+    from the real judge prompts and each judge's past answer lengths."""
+    est = plan.Estimate()
+    history = plan.output_history(store)
+    jobs, repeats = plan_jobs(rows, metrics, judges, repeat_sample=repeat_sample, sample=sample, seed=seed)
+    for attempt, job_list in ((1, jobs), (2, repeats)):
+        for i, m, jm in job_list:
+            if jm is None:
+                continue
+            est.calls += 1
+            prompt = build_prompt(m, cases[rows[i]["case_id"]]["inputs"], rows[i]["output"], rows[i].get("checks"))
+            if use_cache:
+                key, _ = call_key(jm, prompt, SYSTEM, settings, mock=mock, cache_tag=_tag(attempt))
+                if store.cached(key) is not None:
+                    est.cached += 1
+                    continue
+            out = history.get((jm, m["name"]))
+            if out is None:
+                out = DEFAULT_JUDGE_OUTPUT_TOKENS
+                est.guessed.add(jm)
+            if mock:
+                continue
+            cost = plan._price(jm, plan._tokens(SYSTEM + prompt), int(out), {})
+            if cost is None:
+                est.unpriced.add(jm)
+            else:
+                est.cost_usd += cost
+                est.by_model[jm] += cost
+    return est
+
+
 async def judge_rows(rows: list[dict], metrics: list[dict], judges: list[str], cases: dict[str, dict], *,
                      settings: dict, store: Store, run_id: str, mock=False, use_cache=True,
-                     repeat_sample: int = 0, seed: int = 0) -> tuple[list[tuple], list[tuple]]:
+                     repeat_sample: int = 0, seed: int = 0, sample: int | None = None,
+                     budget: Budget | None = None) -> tuple[list[tuple], list[tuple]]:
     """Judge every finished output on every judge metric.
 
     Returns (first, repeats): lists of (row index, Judgment). Repeats re-judge a
     random sample of the same (output, metric) pairs to measure consistency.
     """
-    jobs = []
-    for i, row in enumerate(rows):
-        if row.get("output") is None:
-            continue  # the chain failed; nothing to judge
-        judge_model = pick_judge(row["model"], judges)
-        for m in metrics:
-            jobs.append((i, m, judge_model))
-    sample = random.Random(seed).sample(jobs, min(repeat_sample, len(jobs)))
+    jobs, sample_jobs = plan_jobs(rows, metrics, judges, repeat_sample=repeat_sample, sample=sample, seed=seed)
 
     async def run(job_list, attempt):
         by_provider: dict[str, list] = defaultdict(list)
@@ -191,7 +244,7 @@ async def judge_rows(rows: list[dict], metrics: list[dict], judges: list[str], c
                 continue
             by_provider[provider(jm)].append(judge_one(
                 rows[i], m, jm, inputs=cases[rows[i]["case_id"]]["inputs"], settings=settings, store=store,
-                run_id=run_id, mock=mock, use_cache=use_cache, attempt=attempt))
+                run_id=run_id, mock=mock, use_cache=use_cache, attempt=attempt, budget=budget))
             index[provider(jm)].append(i)
         results = await gather_limited(by_provider)
         out = list(zip([i for p in by_provider for i in index[p]], results))
@@ -201,7 +254,7 @@ async def judge_rows(rows: list[dict], metrics: list[dict], judges: list[str], c
         return out
 
     first = await run(jobs, 1)
-    repeats = await run(sample, 2) if sample else []
+    repeats = await run(sample_jobs, 2) if sample_jobs else []
     return first, repeats
 
 
@@ -220,16 +273,18 @@ def consistency(first: list[tuple], repeats: list[tuple]) -> dict | None:
 
 
 def run(rows: list[dict], metrics_spec: dict, judges: list[str], cases: dict[str, dict], *, settings: dict,
-        store: Store | None = None, mock=False, use_cache=True, repeat_sample=0, seed=0):
+        store: Store | None = None, mock=False, use_cache=True, repeat_sample=0, seed=0, sample=None,
+        budget: Budget | None = None):
     """Judge an earlier run's rows in place: each row gets row["judge"][metric] = judgment."""
     run_id = new_run_id()
     metrics = judge_metrics(metrics_spec)
     first, repeats = asyncio.run(judge_rows(
         rows, metrics, judges, cases, settings=settings, store=store or Store(), run_id=run_id, mock=mock,
-        use_cache=use_cache, repeat_sample=repeat_sample, seed=seed))
+        use_cache=use_cache, repeat_sample=repeat_sample, seed=seed, sample=sample, budget=budget))
     bars = {m["name"]: m["pass"] for m in metrics}
     for i, j in first:
         rows[i].setdefault("judge", {})[j.metric] = j.to_dict() | {"passed": passes(j.score, bars[j.metric])}
     for i, j in repeats:
-        rows[i]["judge"][j.metric]["repeat_score"] = j.score
+        if j.metric in rows[i].get("judge", {}):
+            rows[i]["judge"][j.metric]["repeat_score"] = j.score
     return run_id, first, repeats
