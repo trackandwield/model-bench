@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -117,3 +118,41 @@ def test_no_cross_family_judge_is_reported(store):
     _, first, _ = judge.run(rows, metrics.load("battlecard"), ["anthropic/claude-sonnet-5-5"], cases(),
                             settings=SETTINGS, store=store, mock=True)
     assert all("different model family" in j.error for _, j in first)
+
+
+def test_estimate_counts_cached_judgments_as_free(store):
+    rows = rows_for(["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"])
+    specs = judge.judge_metrics(metrics.load("battlecard"))
+    before = judge.estimate(rows, specs, JUDGES, cases(), settings=SETTINGS, store=store, repeat_sample=2)
+    assert (before.calls, before.cached) == (8, 0) and before.cost_usd > 0
+    judge.run(rows, metrics.load("battlecard"), JUDGES, cases(), settings=SETTINGS, store=store, mock=True)
+    mocked = judge.estimate(rows, specs, JUDGES, cases(), settings=SETTINGS, store=store, mock=True)
+    assert mocked.cached == mocked.calls == 6
+
+
+def test_sample_judges_only_some_outputs(store):
+    rows = rows_for(["openai/gpt-5-mini"] * 5)
+    _, first, _ = judge.run(rows, metrics.load("battlecard"), JUDGES, cases(), settings=SETTINGS,
+                            store=store, mock=True, sample=2)
+    assert len({i for i, _ in first}) == 2
+    assert sum("judge" in r for r in rows) == 2
+
+
+def test_budget_stops_new_judge_calls(store, monkeypatch):
+    calls = []
+
+    async def fake(model, prompt, *, system, temperature, max_tokens, mock_response):
+        calls.append(model)
+        await asyncio.sleep(0.01)  # like a network call, so several are in flight at once
+        return CallResult(model, json.dumps({"evidence": [], "reasoning": "r", "score": 4}), 1, 1, 1.0, 0.1)
+    monkeypatch.setattr("bench.compare.acall_model", fake)
+    from bench.workflow import Budget
+    rows = rows_for(["openai/gpt-5-mini"] * 3)  # 9 judgments, all by one judge
+    for n, row in enumerate(rows):
+        row["output"] += f"\nCard {n}."  # distinct outputs, so nothing comes from the cache
+    cap = Budget(0.5)
+    _, first, _ = judge.run(rows, metrics.load("battlecard"), JUDGES, cases(), settings=SETTINGS,
+                            store=store, budget=cap)
+    # Up to 4 calls per provider run at once, so those finish; nothing starts after the cap.
+    assert len(calls) == 4
+    assert sum(1 for _, j in first if j.error and j.error.startswith("Budget")) == 5

@@ -224,11 +224,25 @@ def cmd_judge(args: argparse.Namespace) -> int:
     judges = args.judge or config.get("judges") or []
     settings = {k: (config.get("judge_settings") or {}).get(k, d) for k, d in (("temperature", 0), ("max_tokens", 4096))}
     cases = {c["id"]: c for c in dataset.load(task_name)}
+    budget = args.budget if args.budget is not None else config.get("budget_usd")
     todo = sum(1 for r in rows if r.get("output") is not None)
+    if args.sample is not None:
+        todo = min(todo, args.sample)
     print(f"Judging {todo} output(s) × {len(judge_specs)} metric(s) with {', '.join(judges)}"
           f"{' (mocked)' if args.mock else ''}; {args.repeat} repeat(s) for consistency")
-    run_id, first, repeats = judge.run(rows, spec, judges, cases, settings=settings, mock=args.mock,
-                                       use_cache=not args.no_cache, repeat_sample=args.repeat)
+    store = Store()
+    opts = dict(settings=settings, store=store, mock=args.mock, use_cache=not args.no_cache,
+                repeat_sample=args.repeat, sample=args.sample)
+    est = judge.estimate(rows, judge_specs, judges, cases, **opts)
+    _print_estimate(est, judges, budget)
+    if args.estimate:
+        return 0
+    if budget is not None and est.cost_usd > budget:
+        print(f"\nNot judged: the estimate is over the ${budget:.2f} budget. Rerun with --budget "
+              f"{est.cost_usd * 1.2:.2f} (or more), or judge a sample with --sample N.")
+        return 1
+    cap = workflow.Budget(budget)
+    run_id, first, repeats = judge.run(rows, spec, judges, cases, budget=cap, **opts)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
 
     names = [m["name"] for m in judge_specs]
@@ -265,8 +279,11 @@ def cmd_judge(args: argparse.Namespace) -> int:
     c = judge.consistency(first, repeats)
     if c:
         print(f"\nConsistency: judged {c['pairs']} again; same score {c['exact']:.0%}, within 1 point {c['within_1']:.0%}")
-    known = [j.cost_usd for _, j in first + repeats if j.cost_usd is not None]
-    print(f"\njudge run {run_id}: cost ${sum(known):.6f}; scores saved into {path}")
+    stopped = sum(1 for _, j in first + repeats if j.error and j.error.startswith("Budget"))
+    if stopped:
+        print(f"\n{stopped} judgment(s) skipped at the budget cap. Rerun the same command to finish; "
+              "finished judgments are free.")
+    print(f"\njudge run {run_id}: spent ${cap.spent:.4f}; scores saved into {path}")
     return 1 if first and all(j.error for _, j in first) else 0
 
 
@@ -328,6 +345,9 @@ def build_parser() -> argparse.ArgumentParser:
     jdg.add_argument("file", help="A run file, runs/<run id>-<task>.jsonl")
     jdg.add_argument("--judge", action="append", help="Judge model id (repeatable); defaults to `judges` in models.yaml.")
     jdg.add_argument("--repeat", type=int, default=5, help="Judge this many random outputs twice to check consistency.")
+    jdg.add_argument("--sample", type=int, help="Judge only this many random outputs.")
+    jdg.add_argument("--budget", type=float, help="Spend cap in USD; defaults to budget_usd in models.yaml.")
+    jdg.add_argument("--estimate", action="store_true", help="Print the cost estimate and stop.")
     jdg.add_argument("--mock", action="store_true", help="Skip the network; canned verdicts.")
     jdg.add_argument("--no-cache", action="store_true", help="Call the judge even if an identical call is cached.")
     jdg.set_defaults(func=cmd_judge)
