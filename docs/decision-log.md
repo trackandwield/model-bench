@@ -82,3 +82,8 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 ## 2026-10-16: the judge gets a cost estimate and budget too
 - **Found:** judging 21 cards cost $0.70, more than writing them. A full run of 240 cards would be about $8 to judge, with no warning.
 - **Fix:** `bench judge` estimates first (cached judgments free; output length from each judge's history), refuses to start over the budget, and stops new calls once it's spent. `--sample N` judges a random subset, so a cheap sample can be checked before paying for everything.
+
+## 2026-10-16: rank models only on metrics they all have
+- **Found:** with a judge sample, one model can have judge scores and another none. A weighted score over "whatever was measured" then ranks the unjudged model on easy checks alone, and it looks best.
+- **Fix:** the ranking uses only metrics every ranked model has at least 5 measured outputs for, with the locked weights re-normalized over them. The report names those metrics and the share of the locked weight they cover, so a checks-only ranking is labelled as one.
+- **Not ranked:** models that finished under half their cases. Gemini's 3 of 60 can't support a conclusion.
