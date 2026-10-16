@@ -43,6 +43,8 @@ uv run python -m bench check runs/<run id>-battlecard.jsonl   # re-run checks on
 uv run python -m bench judge runs/<run id>-battlecard.jsonl --estimate   # judging cost only, no calls
 uv run python -m bench judge runs/<run id>-battlecard.jsonl --sample 30  # judge 30 random cards
 uv run python -m bench judge runs/<run id>-battlecard.jsonl              # judge every card
+uv run python -m bench analyze runs/<run id>-battlecard.jsonl   # scorecard, where, consistency, recommendation (free)
+uv run python -m bench analyze runs/<run id>-battlecard.jsonl --patterns   # plus failure patterns (one judge call per model)
 uv run python -m bench lock battlecard
 uv run python -m bench verify battlecard
 uv run pytest
@@ -78,6 +80,18 @@ Known judge biases and what the bench does about them:
 Judging costs more than writing: every card gets one judge call per metric, from a stronger model. So `bench judge` estimates its cost first and holds to the same budget as runs (`budget_usd`, or `--budget`). `--sample N` judges N random cards; judgments are cached, so judging the rest later only pays for the new ones.
 
 Automatic checks can hand their flags to the judge (`show_checks`), so a number the checks couldn't find in the profiles gets a ruling: invented, or correctly worked out from the source.
+
+## Analysis
+
+`bench analyze <run file>` turns a run into a recommendation, and saves it as `<run>.report.md` and `<run>.analysis.json`:
+
+- **Scorecard:** each metric's pass rate per model, and a weighted score using the locked weights. Models are ranked only on metrics every model has enough data for (a judge sample of a few cards is shown but not ranked on), and the report says which metrics the score covers.
+- **Where:** score per model for each case tag (tricky vs normal, short vs long profile, each trick).
+- **Consistency:** how much each model's score moves between repeats of the same case, and how often a metric passes on one repeat and fails on another.
+- **Cost vs quality:** the models no other model beats on both score and cost per card, and a cheaper model that's within reach of the best.
+- **Why:** the most common failures per model with evidence; `--patterns` asks a judge model to group the judge's reasons into recurring problems.
+
+A model that finished under half its cases (say, a provider that kept refusing calls) is listed but not ranked.
 
 ## Repo layout
 

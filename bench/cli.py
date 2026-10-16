@@ -9,7 +9,7 @@ from pathlib import Path
 import litellm
 from dotenv import load_dotenv
 
-from bench import checks, compare, dataset, judge, metrics, plan, tasks, workflow
+from bench import analyze, checks, compare, dataset, judge, metrics, plan, tasks, workflow
 from bench.models import call_model, load_config
 from bench.store import Store
 
@@ -287,6 +287,44 @@ def cmd_judge(args: argparse.Namespace) -> int:
     return 1 if first and all(j.error for _, j in first) else 0
 
 
+def cmd_analyze(args: argparse.Namespace) -> int:
+    """Scorecard, where, consistency, cost vs quality and a recommendation for a run. Free
+    unless --patterns, which asks a judge model to group the judge's reasons for low scores."""
+    path = Path(args.file)
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    task_name = rows[0]["task"]
+    spec = metrics.load(task_name)
+    cases = {c["id"]: c for c in dataset.load(task_name)}
+    result = analyze.analyze(rows, spec, cases)
+
+    if args.patterns:
+        import asyncio
+        config = load_config()
+        model = (args.judge or config.get("judges") or [None])[0]
+        settings = {k: (config.get("judge_settings") or {}).get(k, d) for k, d in (("temperature", 0), ("max_tokens", 4096))}
+        store, run_id, result["patterns"], spent = Store(), compare.new_run_id(), {}, 0.0
+        for m in result["scorecard"]:
+            prompt = analyze.pattern_prompt(m, rows, spec)
+            if not prompt:
+                continue
+            mock = json.dumps({"patterns": [{"name": "Mock pattern", "count": 2, "examples": []}]}) if args.mock else None
+            r = asyncio.run(compare.cached_call(model, prompt, system=None, settings=settings, store=store,
+                                                run_id=run_id, mock_text=mock, input_id=f"{m}:patterns"))
+            spent += 0.0 if args.mock or r.cached else (r.cost_usd or 0.0)
+            result["patterns"][m] = analyze.parse_patterns(r.text) if not r.error else []
+            if r.error:
+                print(f"Failure patterns for {m} failed: {r.error}")
+        print(f"Failure patterns grouped by {model}: ${spent:.4f}")
+
+    report = analyze.report_markdown(result, path.stem)
+    report_path = path.with_name(path.stem + ".report.md")
+    report_path.write_text(report, encoding="utf-8")
+    path.with_name(path.stem + ".analysis.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(report)
+    print(f"Saved {report_path} and {path.stem}.analysis.json")
+    return 0
+
+
 def cmd_lock(args: argparse.Namespace) -> int:
     try:
         record = metrics.lock(args.task)
@@ -351,6 +389,13 @@ def build_parser() -> argparse.ArgumentParser:
     jdg.add_argument("--mock", action="store_true", help="Skip the network; canned verdicts.")
     jdg.add_argument("--no-cache", action="store_true", help="Call the judge even if an identical call is cached.")
     jdg.set_defaults(func=cmd_judge)
+
+    ana = sub.add_parser("analyze", help="Scorecard, where, consistency and a recommendation for a run (free).")
+    ana.add_argument("file", help="A run file, runs/<run id>-<task>.jsonl")
+    ana.add_argument("--patterns", action="store_true", help="Group the judge's reasons into failure patterns (one judge call per model).")
+    ana.add_argument("--judge", action="append", help="Model for --patterns; defaults to the first of `judges`.")
+    ana.add_argument("--mock", action="store_true", help="With --patterns: skip the network.")
+    ana.set_defaults(func=cmd_analyze)
 
     lock = sub.add_parser("lock", help="Validate a task's metrics.yaml and record its hash.")
     lock.add_argument("task")
