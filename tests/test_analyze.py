@@ -81,3 +81,32 @@ def test_report_renders_for_the_battlecard_metrics():
     cases = {c["id"]: c for c in dataset.load("battlecard")}
     md = analyze.report_markdown(analyze.analyze(rows, spec, cases), "test")
     assert "## Scorecard" in md and "## Recommendation" in md
+
+
+def test_cached_outputs_do_not_count_as_free_or_instant():
+    fresh = row("a", "c0", cost=0.02)
+    reused = dict(row("a", "c1", cost=0.0), latency_s=0.0, steps=[{"cached": True}])
+    card = analyze.scorecard([fresh, reused], SPEC)
+    assert card["a"]["cost_per_output"] == 0.02 and card["a"]["latency_s"] == 1.0
+    only_cached = analyze.scorecard([reused], SPEC)
+    assert only_cached["a"]["cost_per_output"] is None and only_cached["a"]["latency_s"] is None
+
+
+def test_a_price_added_after_the_run_fills_in_cost():
+    r = dict(row("llama", "c0", cost=None), steps=[{"input_tokens": 1000, "output_tokens": 500}])
+    assert analyze.fill_prices([r], {"llama": {"input": 1.0, "output": 2.0}}) == 1
+    assert r["cost_usd"] == (1000 * 1.0 + 500 * 2.0) / 1_000_000
+
+
+def test_unpriced_best_model_is_not_called_more_expensive():
+    rows = [row("best", f"c{i}", cost=None) for i in range(6)] + [row("cheap", f"c{i}", length=i > 0) for i in range(6)]
+    lines = analyze.recommend(analyze.scorecard(rows, SPEC), SPEC, good_enough=0.5)
+    assert not any(l.startswith("Good enough for less") for l in lines)
+    assert any("best has no price set" in l for l in lines)
+
+
+def test_unranked_model_shows_as_not_ranked_in_the_report():
+    rows = [row("a", f"c{i}") for i in range(6)] + [row("g", "c0")]
+    rows += [dict(row("g", f"c{i}"), output=None) for i in range(1, 6)]
+    report = analyze.report_markdown(analyze.analyze(rows, SPEC, CASES), "r1")
+    assert "| g | not ranked |" in report

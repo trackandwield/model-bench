@@ -16,6 +16,20 @@ from bench.judge import passes
 MIN_COMPLETION = 0.5
 
 
+def fill_prices(rows: list[dict], prices: dict[str, dict]) -> int:
+    """Cost outputs that were run before their model had a price, from the tokens each
+    step used. Returns how many outputs got a cost."""
+    filled = 0
+    for r in rows:
+        p = prices.get(r["model"])
+        if not p or r.get("cost_usd") is not None or r.get("output") is None:
+            continue
+        r["cost_usd"] = sum(s["input_tokens"] * p["input"] + s["output_tokens"] * p["output"]
+                            for s in r.get("steps", [])) / 1_000_000
+        filled += 1
+    return filled
+
+
 def metric_value(row: dict, metric: dict) -> float | None:
     """One output's result on one metric, from 0 (worst) to 1 (best); None if not measured."""
     if metric["type"] == "check":
@@ -65,14 +79,17 @@ def scorecard(rows: list[dict], spec: dict, min_n: int = 5) -> dict:
                 "passed": sum(passed),
                 "pass_rate": _mean([float(p) for p in passed]),
             }
-        costs = [r.get("cost_usd") for r in done]
+        # A cached output was paid for in an earlier run and logs $0 and 0 s here, so cost
+        # and speed come from outputs this run actually generated.
+        fresh = [r for r in done if not any(s.get("cached") for s in r.get("steps", []))]
+        costs = [r.get("cost_usd") for r in fresh]
         out[model] = {
             "completed": len(done),
             "total": len(mine),
             "ranked": bool(mine) and len(done) / len(mine) >= MIN_COMPLETION,
             "metrics": per_metric,
             "cost_per_output": None if not costs or None in costs else sum(costs) / len(costs),
-            "latency_s": _mean([r.get("latency_s") for r in done]),
+            "latency_s": _mean([r.get("latency_s") for r in fresh]),
         }
     ranked = [v for v in out.values() if v["ranked"]]
     basis = [m for m in scored if ranked and all(v["metrics"][m["name"]]["n"] >= min_n for v in ranked)]
@@ -187,6 +204,8 @@ def recommend(card: dict, spec: dict, good_enough: float = 0.05) -> list[str]:
     ranked = {m: v for m, v in card.items() if v["ranked"] and v["score"] is not None}
     skipped = [m for m, v in card.items() if not v["ranked"]]
     if not ranked:
+        if len(skipped) < len(card):
+            return ["Too few outputs to rank: every model needs at least 5 measured on the same metrics."]
         return ["No model finished enough cases to rank."]
     best = max(ranked, key=lambda m: ranked[m]["score"])
     tied = [m for m, v in ranked.items() if ranked[best]["score"] - v["score"] < 0.01]
@@ -200,8 +219,12 @@ def recommend(card: dict, spec: dict, good_enough: float = 0.05) -> list[str]:
     if near:
         cheapest = min(near, key=lambda m: priced[m]["cost_per_output"])
         if cheapest != best and len(tied) == 1:
-            lines.append(f"Good enough for less: {cheapest} is within {good_enough:.2f} of the best "
-                         f"at ${priced[cheapest]['cost_per_output']:.4f} per card.")
+            per_card = f"${priced[cheapest]['cost_per_output']:.4f} per card"
+            if best in priced:
+                lines.append(f"Good enough for less: {cheapest} is within {good_enough:.2f} of the best at {per_card}.")
+            else:
+                lines.append(f"Cheapest close to the best: {cheapest}, within {good_enough:.2f} at {per_card}. "
+                             f"{best} has no price set, so it can't be compared on cost; add its price_per_mtok in models.yaml.")
     for m, v in ranked.items():
         weak = [f"{n} ({s['passed']}/{s['n']})" for n, s in v["metrics"].items()
                 if s["n"] >= 5 and s["pass_rate"] < 0.7]
@@ -269,7 +292,7 @@ def report_markdown(result: dict, run_name: str) -> str:
               "|---|---|---|---|---|"]
     for m in models:
         v = card[m]
-        score = "-" if v["score"] is None else f"{v['score']:.2f}"
+        score = "not ranked" if not v["ranked"] else "-" if v["score"] is None else f"{v['score']:.2f}"
         cost = "unknown" if v["cost_per_output"] is None else f"${v['cost_per_output']:.4f}"
         lat = "-" if v["latency_s"] is None else f"{v['latency_s']:.1f} s"
         lines.append(f"| {short[m]} | {score} | {v['completed']}/{v['total']} | {cost} | {lat} |")

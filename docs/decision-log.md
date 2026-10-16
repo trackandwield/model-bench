@@ -87,3 +87,7 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 - **Found:** with a judge sample, one model can have judge scores and another none. A weighted score over "whatever was measured" then ranks the unjudged model on easy checks alone, and it looks best.
 - **Fix:** the ranking uses only metrics every ranked model has at least 5 measured outputs for, with the locked weights re-normalized over them. The report names those metrics and the share of the locked weight they cover, so a checks-only ranking is labelled as one.
 - **Not ranked:** models that finished under half their cases. Gemini's 3 of 60 can't support a conclusion.
+
+## 2026-10-16: judge samples per model, and real cost and speed
+- **Found:** the first full report ranked on three checks only (25% of the locked weight), because a 10-card judge sample landed 6 on one model and 1 or 2 on the others. Cached outputs also counted as $0 and 0 s, so Gemini's 3 reused cards showed as free and instant, and other models looked cheaper and faster than they are. Llama, run before its price was set, stayed "unknown" for good.
+- **Fix:** `--sample N` now means N cards per model, so 5 per model puts the judge metrics into the ranking. Cost and speed come only from outputs a run generated itself. `bench analyze` costs unpriced outputs from their token counts once a price is added to models.yaml. A model that isn't ranked shows "not ranked" instead of a score, and the recommendation doesn't call a model cheaper than one whose price is unknown.
