@@ -83,6 +83,8 @@ Automatic checks can hand their flags to the judge (`show_checks`), so a number 
 
 ## Analysis
 
+![How the analysis works](docs/img/analysis-pipeline.png)
+
 `bench analyze <run file>` turns a run into a recommendation, and saves it as `<run>.report.md` and `<run>.analysis.json`:
 
 - **Scorecard:** each metric's pass rate per model, and a weighted score using the locked weights. Models are ranked only on metrics every model has enough data for (a judge sample of a few cards is shown but not ranked on), and the report says which metrics the score covers.
