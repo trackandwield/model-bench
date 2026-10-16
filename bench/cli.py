@@ -152,7 +152,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     unfinished = sum(1 for r in results if r.failed_step)
     if unfinished:
         print(f"{unfinished} chain(s) didn't finish. To retry only those (finished calls are free):")
-        print(f"  uv run python -m bench run --resume {config_file}")
+        print(f'  uv run python -m bench run --resume "{config_file}"')
     else:
         print(f"config (to reproduce): {config_file}")
     return 1 if all(r.failed_step for r in results) else 0
