@@ -74,7 +74,16 @@ def pick_judge(model: str, judges: list[str]) -> str | None:
 
 
 def _norm(s: str) -> str:
+    s = s.replace("’", "'").replace("‘", "'")
     return " ".join(re.sub(r"[*_`#>\"“”]", "", s).lower().split())
+
+
+def quote_found(quote: str, texts: tuple[str, ...]) -> bool:
+    """A quote counts as found when every part of it is in the output. Judges join
+    separate passages with "..." so each part is checked on its own."""
+    parts = [_norm(p) for p in re.split(r"\.\.\.|…", quote)]
+    parts = [p for p in parts if p]
+    return bool(parts) and any(all(p in t for p in parts) for t in texts)
 
 
 def parse(text: str) -> tuple[int, str, list[str]]:
@@ -176,7 +185,7 @@ async def judge_one(row: dict, metric: dict, judge_model: str, *, inputs: dict, 
         j.error = f"Unreadable judge reply ({e}): {r.text[:200]}"
         return j
     texts = (_norm(output), _norm(blind(output)))
-    j.missing_quotes = [q for q in j.evidence if _norm(q) and not any(_norm(q) in t for t in texts)]
+    j.missing_quotes = [q for q in j.evidence if _norm(q) and not quote_found(q, texts)]
     return j
 
 

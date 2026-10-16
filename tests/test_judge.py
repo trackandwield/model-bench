@@ -156,3 +156,9 @@ def test_budget_stops_new_judge_calls(store, monkeypatch):
     # Up to 4 calls per provider run at once, so those finish; nothing starts after the cap.
     assert len(calls) == 4
     assert sum(1 for _, j in first if j.error and j.error.startswith("Budget")) == 5
+
+
+def test_quotes_joined_with_ellipses_or_curly_apostrophes_still_count():
+    texts = (judge._norm("We need strong Kubernetes views. Some text. While they're strong, we unify logs."),)
+    assert judge.quote_found('"We need strong Kubernetes views." ... "While they’re strong"', texts)
+    assert not judge.quote_found("We need strong Kubernetes views … and 900 customers", texts)
