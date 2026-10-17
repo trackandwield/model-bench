@@ -20,7 +20,7 @@ Marketing teams pick an AI model by gut feel or by a public leaderboard that tes
 | 1. Foundations: setup, locked metrics, test set | Built; metrics awaiting PMM review |
 | 2. Engine: model layer, tasks, checks, judge, runs | Model layer, task workflows, automatic checks and LLM judge built |
 | 3. Human review and analysis | Analysis built; human review waits for the web app's review screen |
-| 4. Web app and write-up | Web app: results and side-by-side screens built |
+| 4. Web app and write-up | Web app: run builder, judging, results and side-by-side screens built |
 
 ## Run it
 
@@ -100,8 +100,9 @@ A model that finished under half its cases (say, a provider that kept refusing c
 
 `bench serve` opens the bench in the browser, for people who'd rather not read a terminal. It reads the same run files, so anything run from the command line shows up there.
 
+- **New run:** pick a task, how many cases, repeats and models, see the locked metrics, estimate the cost, then run. A practice run uses canned answers and costs nothing. Progress shows while it runs.
 - **Saved runs:** every task run, newest first, with how many outputs finished and how many were judged.
-- **Results:** the recommendation, scorecard, pass rate per metric, a heatmap of where each model is strong or weak, cost vs quality, consistency, and the most common failures with links to the cards behind them.
+- **Results:** judge a sample of cards per model (estimate first, same budget as runs), then the recommendation, scorecard, pass rate per metric, a heatmap of where each model is strong or weak, cost vs quality, consistency, and the most common failures with links to the cards behind them.
 - **Side by side:** one case's inputs and every model's card next to each other, with each automatic check, the judge's scores and reasoning, and the numbers or phrases that failed highlighted in the card.
 
 It's FastAPI with server-rendered pages: no Node or build step, one command to start, and it binds to this computer only unless you pass `--host`.

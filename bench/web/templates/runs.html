@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Saved runs · Model Bench{% endblock %}
 {% block main %}
-<div>
-  <h1>Saved runs</h1>
-  <p class="lede">Every comparison run from this folder, newest first. Runs made from the command line show up here too.</p>
+<div class="head">
+  <div>
+    <h1>Saved runs</h1>
+    <p class="lede">Every comparison run from this folder, newest first. Runs made from the command line show up here too.</p>
+  </div>
+  <a class="btn primary" href="/new">New run</a>
 </div>
 <section class="panel">
 {% if runs %}
@@ -31,7 +34,7 @@
     </table>
   </div>
 {% else %}
-  <div class="empty">No runs yet. Start one with <code>uv run python -m bench run battlecard</code>.</div>
+  <div class="empty">No runs yet. <a href="/new">Start one</a>.</div>
 {% endif %}
 </section>
 {% endblock %}

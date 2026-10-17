@@ -7,11 +7,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="/static/app.css">
+{% block head %}{% endblock %}
 </head>
 <body>
 <header class="top">
   <a class="brand" href="/runs">Model Bench</a>
   <nav aria-label="Main">
+    <a href="/new" class="{{ 'on' if nav == 'new' }}">New run</a>
     <a href="/runs" class="{{ 'on' if nav == 'runs' }}">Saved runs</a>
   </nav>
 </header>

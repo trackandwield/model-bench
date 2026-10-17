@@ -133,6 +133,29 @@
   </section>
 </div>
 
+<section class="panel" id="judge">
+  <h2>Judge</h2>
+  <p class="note">{{ judge.judged }} of {{ judge.finished }} finished cards have judge scores. The judge ({{ judge.judges | map('short') | join(' or ') }}, never the same family as the writer) scores the subjective metrics. A sample of 6 cards per model is enough for a first look.</p>
+  {% if judge.over %}<p class="problems" style="list-style: none;">That's over the budget. Judge fewer cards per model, or raise the budget.</p>{% endif %}
+  <form method="get" action="/runs/{{ name }}#judge" class="inline">
+    <div><label class="field" for="judge_sample">Cards per model</label>
+      <input id="judge_sample" name="judge_sample" type="number" min="1" value="{{ judge.sample }}" style="width: 120px;"></div>
+    <button class="btn" type="submit">Estimate cost</button>
+  </form>
+  {% if judge.estimate %}{% set e = judge.estimate %}
+  <div class="estimate" style="margin-top: 14px;" aria-live="polite">
+    <div><div class="big">{{ e.calls }}</div><div class="hint">judge calls</div></div>
+    <div><div class="big">{{ e.cached }}</div><div class="hint">already judged (free)</div></div>
+    <div><div class="big">${{ '%.2f' | format(e.cost_usd) }}</div><div class="hint">estimated cost{{ '; budget $%.2f' | format(judge.budget) if judge.budget is not none }}</div></div>
+  </div>
+  <form method="post" action="/runs/{{ name }}/judge" style="margin-top: 14px;">
+    <input type="hidden" name="sample" value="{{ judge.sample }}">
+    {% if config.mock %}<input type="hidden" name="mock" value="true">{% endif %}
+    <button class="btn primary" type="submit">Judge {{ judge.sample ~ ' cards per model' if judge.sample else 'every card' }}</button>
+  </form>
+  {% endif %}
+</section>
+
 <section class="panel">
   <h2>Why they fail</h2>
   <p class="note">{% if patterns %}Recurring problems the judge found, grouped by <code>bench analyze --patterns</code>.{% else %}The metrics each model fails most, with examples. Run <code>bench analyze --patterns</code> to group the judge's reasons into recurring problems.{% endif %}</p>

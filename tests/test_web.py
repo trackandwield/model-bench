@@ -1,9 +1,11 @@
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 from bench import compare
+from bench.store import Store
 from bench.web import app as web
 
 RUN = "20261017-090000-battlecard"
@@ -78,3 +80,62 @@ def test_unknown_runs_and_paths_are_not_found(client):
 def test_missing_repeat_redirects_to_one_that_exists(client):
     page = client.get(f"/runs/{RUN}/cases/bc-001?repeat=9", follow_redirects=False)
     assert page.status_code in (302, 307) and page.headers["location"].endswith("repeat=1")
+
+
+@pytest.fixture
+def runs_here(tmp_path, monkeypatch):
+    from bench import plan, workflow
+    for mod in (compare, workflow, plan):
+        monkeypatch.setattr(mod, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr("bench.web.jobs.Store", lambda: Store(tmp_path / "bench.db"))
+    return tmp_path
+
+
+def wait(job, seconds=20):
+    end = time.time() + seconds
+    while job.status == "running" and time.time() < end:
+        time.sleep(0.05)
+    return job
+
+
+def test_run_builder_estimates_without_running(runs_here):
+    client = TestClient(web.app)
+    page = client.post("/new", data={"task": "battlecard", "action": "estimate", "models": ["openai/gpt-5-mini"],
+                                     "limit": "2", "repeats": "1", "budget": "3", "mock": "true"})
+    assert page.status_code == 200 and "model calls" in page.text
+    assert not list(runs_here.glob("*.jsonl"))
+
+
+def test_practice_run_from_the_browser_then_judge(runs_here):
+    from bench.web import jobs
+    client = TestClient(web.app)
+    page = client.post("/new", data={"task": "battlecard", "action": "run", "models": ["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"],
+                                     "limit": "2", "repeats": "2", "budget": "3", "mock": "true"}, follow_redirects=False)
+    assert page.status_code == 303
+    job = wait(jobs.JOBS[page.headers["location"].rsplit("/", 1)[1]])
+    assert (job.status, job.done, job.total) == ("finished", 8, 8)
+    assert client.get(page.headers["location"]).text.count("See results") == 1
+    results = client.get(f"/runs/{job.run_name}?judge_sample=1")
+    assert "judge calls" in results.text
+    judged = client.post(f"/runs/{job.run_name}/judge", data={"sample": "1", "mock": "true"}, follow_redirects=False)
+    jjob = wait(jobs.JOBS[judged.headers["location"].rsplit("/", 1)[1]])
+    assert jjob.status == "finished"
+    rows = [json.loads(l) for l in (runs_here / f"{job.run_name}.jsonl").read_text().splitlines()]
+    assert sum("judge" in r for r in rows) == 2  # one card per model
+
+
+def test_real_run_needs_api_keys(runs_here, monkeypatch):
+    for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    client = TestClient(web.app)
+    page = client.post("/new", data={"task": "battlecard", "action": "run", "models": ["openai/gpt-5-mini"],
+                                     "limit": "1", "repeats": "1", "budget": "3"})
+    assert page.status_code == 400 and "No API key" in page.text
+
+
+def test_run_over_budget_is_refused(runs_here, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    client = TestClient(web.app)
+    page = client.post("/new", data={"task": "battlecard", "action": "run", "models": ["openai/gpt-5-mini"],
+                                     "repeats": "3", "budget": "0.0001"})
+    assert page.status_code == 400 and "over the $0.00 budget" in page.text

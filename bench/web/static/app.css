@@ -115,3 +115,26 @@ blockquote.quote { margin: 4px 0; padding: 4px 10px; border-left: 3px solid var(
   .top, main { padding-left: 16px; padding-right: 16px; }
   .bar .track { width: 90px; }
 }
+
+/* Forms */
+.form-grid { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.form-grid > .col { flex: 1 1 480px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+label.field { display: block; font-weight: 600; margin-bottom: 6px; }
+input[type=number], input[type=text], select.wide { font: inherit; padding: 10px 12px; border: 1px solid #C4C8D0; border-radius: 8px; background: #FFF; min-height: 44px; }
+select.wide { width: 100%; }
+.models { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.models label, .check { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; min-height: 44px; }
+.models input, .check input { width: 18px; height: 18px; flex: none; }
+.models .missing { color: var(--bad-fg); font-size: 12px; }
+.inline { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+.inline > div { display: flex; flex-direction: column; }
+.hint { font-size: 13px; color: var(--muted); }
+.callout { padding: 12px 14px; border-radius: 8px; background: #FFF4E8; color: var(--bad-fg); font-size: 14px; }
+.callout.ok { background: var(--accent-soft); color: var(--good-fg); }
+.problems { margin: 0; padding: 12px 14px 12px 32px; border-radius: 8px; background: var(--bad-bg); color: var(--bad-fg); }
+.estimate { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.estimate .big { font-size: 24px; font-weight: 600; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.step-prompt { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; background: var(--ground); padding: 10px; border-radius: 6px; max-height: 220px; overflow: auto; }
+.progress { height: 10px; border-radius: 5px; background: var(--line); }
+.progress > div { height: 10px; border-radius: 5px; background: var(--accent); }

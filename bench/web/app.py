@@ -11,14 +11,16 @@ import json
 import re
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+import litellm
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 
-from bench import analyze, compare, dataset, metrics
+from bench import analyze, compare, dataset, metrics, tasks
 from bench.models import configured_prices, load_config
+from bench.web import jobs
 
 HERE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=HERE / "templates")
@@ -196,8 +198,12 @@ def runs_page(request: Request):
 
 
 @app.get("/runs/{name}", response_class=HTMLResponse)
-def results_page(request: Request, name: str):
+def results_page(request: Request, name: str, judge_sample: str | None = None, over: int = 0):
     rows, spec, cases, result = analyze_run(name)
+    config = load_config_file(name)
+    n = int(judge_sample) if judge_sample and judge_sample.isdigit() and int(judge_sample) > 0 else None
+    judge_est = (jobs.estimate_judging(name, sample=n, mock=bool(config.get("mock")))
+                 if judge_sample is not None else None)
     card = result["scorecard"]
     models = list(card)
     ranked = sorted((m for m in models if card[m]["ranked"] and card[m]["score"] is not None),
@@ -208,7 +214,7 @@ def results_page(request: Request, name: str):
         "nav": "runs",
         "name": name,
         "run": next((r for r in list_runs() if r["name"] == name), None),
-        "config": load_config_file(name),
+        "config": config,
         "result": result,
         "card": card,
         "models": order,
@@ -218,6 +224,9 @@ def results_page(request: Request, name: str):
         "scatter": scatter(card, result["frontier"]),
         "patterns": saved_patterns(name),
         "first_case": rows[0]["case_id"],
+        "judge": {"sample": judge_sample if judge_sample is not None else "6", "estimate": judge_est, "over": over,
+                  "judged": sum(1 for r in rows if r.get("judge")), "finished": sum(1 for r in rows if r.get("output")),
+                  "budget": load_config().get("budget_usd"), "judges": load_config().get("judges") or []},
     })
 
 
@@ -248,3 +257,120 @@ def compare_page(request: Request, name: str, case_id: str, repeat: int = 1):
         "repeats": repeats,
         "cards": [card_view(r, spec) for r in here],
     })
+
+
+def task_names() -> list[str]:
+    return sorted(p.parent.name for p in metrics.TASKS_DIR.glob("*/task.yaml"))
+
+
+def model_options(config: dict) -> list[dict]:
+    """Models from models.yaml, with whether this computer has the API key each one needs."""
+    out = []
+    for m in config.get("models", []):
+        try:
+            missing = litellm.validate_environment(m["id"]).get("missing_keys") or []
+        except Exception:
+            missing = []
+        out.append({"id": m["id"], "label": m.get("label") or short(m["id"]), "missing": missing,
+                    "priced": m["id"] in configured_prices(config) or _litellm_priced(m["id"])})
+    return out
+
+
+def _litellm_priced(model: str) -> bool:
+    try:
+        litellm.cost_per_token(model=model, prompt_tokens=1, completion_tokens=1)
+        return True
+    except Exception:
+        return False
+
+
+def new_run_context(task: str, form: dict | None = None) -> dict:
+    config = load_config()
+    if task not in task_names():
+        raise HTTPException(404, "No such task")
+    cases = dataset.load(task)
+    t = tasks.load(task)
+    defaults = {"models": [m["id"] for m in config.get("models", [])], "limit": "", "repeats": 1,
+                "budget": config.get("budget_usd"), "mock": False}
+    return {
+        "nav": "new",
+        "tasks": task_names(),
+        "task": task,
+        "steps": t.steps,
+        "case_count": len(cases),
+        "tag_counts": {k: dict(v) for k, v in dataset.summary(cases).items()},
+        "models": model_options(config),
+        "spec": metrics.load(task),
+        "locked": metrics.verify(task),
+        "form": defaults | (form or {}),
+        "judges": config.get("judges") or [],
+    }
+
+
+@app.get("/new", response_class=HTMLResponse)
+def new_run_page(request: Request, task: str | None = None):
+    task = task or (task_names() or [None])[0]
+    if task is None:
+        return templates.TemplateResponse(request, "new.html", {"nav": "new", "tasks": []})
+    return templates.TemplateResponse(request, "new.html", new_run_context(task))
+
+
+@app.post("/new", response_class=HTMLResponse)
+def new_run_submit(request: Request, task: str = Form(...), action: str = Form("estimate"),
+                   models: list[str] = Form([]), limit: str = Form(""), repeats: int = Form(1),
+                   budget: str = Form(""), mock: bool = Form(False)):
+    form = {"models": models, "limit": limit, "repeats": repeats, "budget": budget, "mock": mock}
+    ctx = new_run_context(task, form)
+    known = {m["id"] for m in ctx["models"]}
+    problems = []
+    if not models:
+        problems.append("Pick at least one model.")
+    if set(models) - known:
+        problems.append("Unknown model; models come from models.yaml.")
+    n = int(limit) if limit.strip().isdigit() and int(limit) > 0 else None
+    if not 1 <= repeats <= 10:
+        problems.append("Repeats must be between 1 and 10.")
+    try:
+        cap = float(budget) if budget.strip() else None
+    except ValueError:
+        cap, problems = None, problems + ["Budget must be a number of dollars."]
+    if action == "run" and not mock:
+        missing = [m["label"] for m in ctx["models"] if m["id"] in models and m["missing"]]
+        if missing:
+            problems.append(f"No API key on this computer for {', '.join(missing)}. Add it to .env and restart "
+                            "the app, untick those models, or tick practice run.")
+    if problems:
+        return templates.TemplateResponse(request, "new.html", ctx | {"problems": problems}, status_code=400)
+    *_, est = jobs.plan_run(task, models, limit=n, repeats=repeats, mock=mock)
+    ctx |= {"estimate": est, "cap": cap}
+    if action != "run":
+        return templates.TemplateResponse(request, "new.html", ctx)
+    if cap is not None and est.cost_usd > cap:
+        ctx["problems"] = [f"The estimate (${est.cost_usd:.2f}) is over the ${cap:.2f} budget. "
+                           "Raise the budget, or use fewer cases, models or repeats."]
+        return templates.TemplateResponse(request, "new.html", ctx, status_code=400)
+    job = jobs.start_run(task, models, limit=n, repeats=repeats, mock=mock, budget=cap)
+    return RedirectResponse(f"/jobs/{job.id}", status_code=303)
+
+
+@app.post("/runs/{name}/judge", response_class=HTMLResponse)
+def judge_submit(name: str, sample: str = Form(""), budget: str = Form(""), mock: bool = Form(False)):
+    load_rows(name)  # 404 for an unknown run
+    n = int(sample) if sample.strip().isdigit() and int(sample) > 0 else None
+    try:
+        cap = float(budget) if budget.strip() else load_config().get("budget_usd")
+    except ValueError:
+        raise HTTPException(400, "Budget must be a number of dollars.")
+    est = jobs.estimate_judging(name, sample=n, mock=mock)
+    if cap is not None and est.cost_usd > cap:
+        return RedirectResponse(f"/runs/{name}?judge_sample={sample}&over=1#judge", status_code=303)
+    job = jobs.start_judging(name, sample=n, mock=mock, budget=cap)
+    return RedirectResponse(f"/jobs/{job.id}", status_code=303)
+
+
+@app.get("/jobs/{job_id}", response_class=HTMLResponse)
+def job_page(request: Request, job_id: str):
+    job = jobs.JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "No such job. Jobs are forgotten when the app restarts; the run file is in Saved runs.")
+    return templates.TemplateResponse(request, "job.html", {"nav": "runs", "job": job})

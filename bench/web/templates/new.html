@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}New run · Model Bench{% endblock %}
+{% block main %}
+<div>
+  <h1>New comparison run</h1>
+  <p class="lede">Pick the task, the inputs and the models. Check the estimate, then run. Nothing is spent until you press Run.</p>
+</div>
+{% if not tasks %}
+<section class="panel"><div class="empty">No tasks found in the tasks folder.</div></section>
+{% else %}
+{% if problems %}<ul class="problems" role="alert">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+<form method="post" action="/new" class="form-grid">
+  <div class="col">
+    <section class="panel">
+      <div class="eyebrow">1 · Task</div>
+      <label class="field" for="task">What the models will do</label>
+      <select class="wide" id="task" onchange="location.href='/new?task='+this.value">
+        {% for t in tasks %}<option value="{{ t }}" {{ 'selected' if t == task }}>{{ t }}</option>{% endfor %}
+      </select>
+      <details style="margin-top: 12px;">
+        <summary class="hint" style="cursor: pointer;">See the prompt{{ 's' if steps | length > 1 }} ({{ steps | length }} step{{ 's' if steps | length > 1 }})</summary>
+        {% for s in steps %}<p class="eyebrow" style="margin: 10px 0 4px;">Step {{ loop.index }} · {{ s.name }}</p><div class="step-prompt">{{ s.prompt }}</div>{% endfor %}
+      </details>
+    </section>
+
+    <section class="panel">
+      <div class="eyebrow">2 · Inputs</div>
+      <p class="hint" style="margin: 4px 0 12px;">{{ case_count }} test cases.{% for tag, counts in tag_counts.items() %} {{ tag | replace('_', ' ') | capitalize }}: {% for v, n in counts.items() %}{{ v | replace('_', ' ') }} {{ n }}{{ ', ' if not loop.last }}{% endfor %}.{% endfor %}</p>
+      <div class="inline">
+        <div>
+          <label class="field" for="limit">Cases to use</label>
+          <input id="limit" name="limit" type="number" min="1" max="{{ case_count }}" placeholder="all {{ case_count }}" value="{{ form.limit }}" style="width: 140px;">
+        </div>
+        <div>
+          <label class="field" for="repeats">Repeats per case</label>
+          <input id="repeats" name="repeats" type="number" min="1" max="10" value="{{ form.repeats }}" style="width: 100px;">
+        </div>
+      </div>
+      <p class="hint">Repeats show how consistent each model is; 3 is enough to see it.</p>
+    </section>
+
+    <section class="panel">
+      <div class="eyebrow">3 · Models</div>
+      <div class="models" style="margin-top: 10px;">
+        {% for m in models %}
+        <label>
+          <input type="checkbox" name="models" value="{{ m.id }}" {{ 'checked' if m.id in form.models }}>
+          <span><strong>{{ m.label }}</strong><br><span class="sub">{{ m.id }}</span>
+            {% if m.missing %}<br><span class="missing">needs {{ m.missing | join(' or ') }} in .env</span>{% endif %}
+            {% if not m.priced %}<br><span class="sub">no price set: cost will show as unknown</span>{% endif %}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <p class="hint">Models and settings come from <code>models.yaml</code>. Every model gets the same temperature and length limit.</p>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="panel">
+      <div class="eyebrow">4 · Success metrics</div>
+      <div class="scroll" style="margin-top: 10px;">
+        <table>
+          <thead><tr><th>METRIC</th><th>HOW</th><th class="num">WEIGHT</th><th>PASS IF</th></tr></thead>
+          <tbody>
+          {% for m in spec.metrics %}
+            <tr><td><strong>{{ m.name }}</strong><div class="sub">{{ m.description }}</div></td><td><span class="badge">{{ m.type }}</span></td>
+              <td class="num">{{ '%.0f%%' | format(m.weight * 100) }}</td><td class="num">{{ m.pass if m.pass is defined else '' }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if locked %}<p class="callout ok">Metrics are locked, so nobody can move the goalposts after seeing results.</p>
+      {% else %}<p class="callout">Metrics aren't locked yet. Results are fine to explore, but can't claim the metrics were set in advance until they're reviewed and locked (<code>bench lock {{ task }}</code>).</p>{% endif %}
+    </section>
+
+    <section class="panel">
+      <div class="eyebrow">5 · Estimate and run</div>
+      <div class="inline" style="margin: 10px 0 14px;">
+        <div>
+          <label class="field" for="budget">Budget ($)</label>
+          <input id="budget" name="budget" type="text" inputmode="decimal" value="{{ form.budget if form.budget is not none }}" style="width: 120px;">
+        </div>
+        <label class="check"><input type="checkbox" name="mock" value="true" {{ 'checked' if form.mock }}> Practice run: canned answers, no API calls, $0</label>
+      </div>
+      {% if estimate %}
+      <div class="estimate" aria-live="polite">
+        <div><div class="big">{{ estimate.calls }}</div><div class="hint">model calls</div></div>
+        <div><div class="big">{{ estimate.cached }}</div><div class="hint">already cached (free)</div></div>
+        <div><div class="big">${{ '%.2f' | format(estimate.cost_usd) }}{{ '+' if estimate.unpriced }}</div><div class="hint">estimated cost{{ ', plus unpriced models' if estimate.unpriced }}</div></div>
+      </div>
+      {% if estimate.guessed %}<p class="hint">No past answers yet for {{ estimate.guessed | map('short') | join(', ') }}, so the estimate assumes long answers and errs high.</p>{% endif %}
+      {% endif %}
+      <p class="hint">The judge (for the subjective metrics) runs separately, from the results page, so you can check outputs before paying for judging.</p>
+      <div class="actions">
+        <button class="btn" type="submit" name="action" value="estimate">Estimate cost</button>
+        <button class="btn primary" type="submit" name="action" value="run">Run</button>
+      </div>
+    </section>
+  </div>
+  <input type="hidden" name="task" value="{{ task }}">
+</form>
+{% endif %}
+{% endblock %}

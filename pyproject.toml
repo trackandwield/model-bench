@@ -10,6 +10,7 @@ dependencies = [
     "litellm>=1.70",
     "markdown-it-py>=4.2.0",
     "python-dotenv>=1.0",
+    "python-multipart>=0.0.32",
     "pyyaml>=6.0",
     "uvicorn>=0.54.0",
 ]
