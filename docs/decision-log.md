@@ -95,3 +95,15 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 ## 2026-10-16: "where" and consistency on the same metrics as the ranking
 - **Found:** with judging on a sample, the case-type table scored each card on whatever was measured on it. Most cards had only checks, so every cell read 0.8 to 1.0 while the ranked scores were near 0.6. Claude Haiku looked best on tricky cases (0.94) despite failing every judged fact check. The consistency spread mixed judged and unjudged repeats the same way.
 - **Fix:** the table uses the scorecard's metrics and weights, shows how many outputs each cell rests on, and leaves a cell blank when it has no judged card. Consistency compares repeats only on metrics measured on all of them.
+
+## 2026-10-17: web app in Python, no separate front end
+- **Choice:** FastAPI serving server-rendered pages from the same repo, instead of Next.js plus FastAPI or Streamlit.
+- **Why:** proof-of-concept scale. One `uv run python -m bench serve` on Windows, no Node toolchain or second server, and the pages reuse `bench.analyze` directly, so the browser and `bench analyze` can't disagree. Streamlit would be quicker but reads as a data tool, and the reviewer is a marketer, not an analyst.
+- **Trade-off:** less interactive than a React app. The pages are plain HTML over a small API surface, so a React front end can be added later without touching the engine.
+- **Runs from the browser:** a run or judging job runs in a background thread of the local app, with the same estimate, budget and config file as the CLI. Jobs live in memory, so a restart loses the progress bar but not the work: finished calls are in the cache and the config can be resumed. Judging is a separate step on the results page, so outputs can be checked before paying for it.
+
+## 2026-10-17: human review scores each card, blind
+- **Choice:** the reviewer scores one card at a time, 1 to 5, on the same rubrics as the judge, without seeing the model, the checks or the judge's scores. The mockup had a pairwise "which is better" screen instead.
+- **Why:** per-card scores line up one-to-one with the judge's, so agreement is a direct number per metric (same score, within one point, judge higher or lower). Pairwise picks would only say which card a person prefers, not whether the judge's 4 is a person's 4. The same screen also scores `rep_ready`, which has no judge.
+- **Trust label:** results say "Judge not checked against a person yet" until 20 cards are reviewed, then the within-one-point agreement. Agreement is shown only after scoring, never on the card being scored, so it can't anchor the reviewer.
+- **Order:** a fixed shuffle so cards from one model don't come in a row. A skip is recorded so the card leaves the queue; a later review of the same card replaces the earlier one.

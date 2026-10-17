@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Review · Model Bench{% endblock %}
+{% block main %}
+<div class="head">
+  <div>
+    <a href="/review">All runs</a>
+    <h1>Review queue <span class="sub mono">({{ summary.reviewed }} reviewed, {{ todo }} to go)</span></h1>
+  </div>
+</div>
+<div class="progress" role="progressbar" aria-label="Cards reviewed" aria-valuenow="{{ judged - todo }}" aria-valuemin="0" aria-valuemax="{{ judged }}"><div style="width: {{ ((judged - todo) / judged * 100) if judged else 0 }}%"></div></div>
+
+{% if todo %}
+<div class="review">
+  <div class="col">
+    <section class="panel">
+      <div class="eyebrow">What the model was given · {{ case.id }}</div>
+      <dl class="inputs" style="margin-top: 8px;">
+        {% for k, v in case.inputs.items() %}<div><dt>{{ k }}</dt><dd>{{ v }}</dd></div>{% endfor %}
+      </dl>
+    </section>
+    <article class="card">
+      <header><strong>The card</strong><span class="sub">model hidden</span></header>
+      <div class="out">{{ html | safe }}</div>
+    </article>
+  </div>
+
+  <form class="col panel scoring" method="post" action="/review/{{ name }}">
+    <input type="hidden" name="pos" value="{{ pos }}">
+    <p class="hint" style="margin-top: 0;">Score each one 1 to 5. The judge used the same descriptions; you won't see its scores until after.</p>
+    {% if problems %}<ul class="problems" role="alert">{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+    {% for m in metrics %}
+    <fieldset class="metric">
+      <legend><strong>{{ m.name | replace('_', ' ') | capitalize }}</strong><span class="sub">{{ m.description }}</span></legend>
+      <div class="scale">
+      {% for s in [5, 4, 3, 2, 1] %}
+        <label><input type="radio" name="score_{{ m.name }}" value="{{ s }}" {{ 'checked' if picked.get(m.name) == s }}>
+          <span class="n">{{ s }}</span>
+          <span>{{ m.rubric[s] if m.rubric and m.rubric[s] else ('Use it as is' if s == 5 else 'Needs a full rewrite' if s == 1 else '') }}</span></label>
+      {% endfor %}
+      </div>
+    </fieldset>
+    {% endfor %}
+    <label class="field" for="note">Note <span class="sub">(optional)</span></label>
+    <textarea id="note" name="note" rows="3" placeholder="Anything the scores don't capture">{{ note }}</textarea>
+    <label class="field" for="reviewer" style="margin-top: 12px;">Your name</label>
+    <input id="reviewer" name="reviewer" type="text" value="{{ reviewer }}" autocomplete="name">
+    <div class="actions" style="margin-top: 16px;">
+      <button class="btn primary" type="submit" name="action" value="save">Save and next</button>
+      <button class="btn" type="submit" name="action" value="skip" formnovalidate>Skip</button>
+    </div>
+  </form>
+</div>
+{% else %}
+<section class="panel">
+  <h2>{{ 'All judged cards reviewed' if judged else 'Nothing to review' }}</h2>
+  <p class="note">{{ summary.trust }}.{% if summary.skipped %} {{ summary.skipped }} skipped.{% endif %} Judge more cards from the results page to add to the queue.</p>
+  {% include "_agreement.html" %}
+  <div class="actions" style="margin-top: 16px;"><a class="btn primary" href="/runs/{{ name }}">See results</a></div>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}Results {{ name }} · Model Bench{% endblock %}
+{% block main %}
+{% set rec = result.recommendation %}
+<div class="head">
+  <div>
+    <div class="eyebrow">
+      Run {{ run.run_id if run else name }} · {{ run.task if run }} · {{ models | length }} models × {{ run.cases if run }} cases × {{ run.repeats if run }} repeats
+      · {{ 'metrics locked' if config.metrics_locked else 'metrics not locked' }}{{ ' · mock' if config.mock }}
+    </div>
+    <h1>Results</h1>
+  </div>
+  <a class="btn" href="/runs/{{ name }}/cases/{{ first_case }}">Open side by side</a>
+</div>
+
+<section class="reco" aria-label="Recommendation">
+  <div class="eyebrow">Recommendation</div>
+  <ul>{% for line in rec %}<li>{{ line }}</li>{% endfor %}</ul>
+  <p class="trust {{ 'ok' if result.review.trusted }}">{{ result.review.trust }}{% if not result.review.trusted %} · <a href="/review/{{ name }}">Review cards</a>{% endif %}</p>
+</section>
+
+<section class="panel">
+  <h2>Scorecard</h2>
+  <p class="note">Quality is the weighted score on {{ (card.values() | first).basis | join(', ') if card else '' }}: {{ '%.0f' | format(basis_share * 100) }}% of the locked weight. Metrics with too few judged outputs for every model are shown below but not ranked on.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>MODEL</th><th>QUALITY</th><th class="num">FINISHED</th><th class="num">COST / CARD</th><th class="num">AVG LATENCY</th><th class="num">PASS/FAIL FLIPS</th></tr></thead>
+      <tbody>
+      {% for m in models %}{% set v = card[m] %}{% set c = result.consistency[m] %}
+        <tr class="{{ '' if v.ranked else 'unranked' }}">
+          <td><strong>{{ m | short }}</strong><div class="sub">{{ m }}</div></td>
+          <td>
+            {% if not v.ranked %}<span class="badge warn">not ranked: finished under half</span>
+            {% elif v.score is none %}<span class="sub">too few outputs</span>
+            {% else %}<div class="bar"><div class="track"><div class="fill" style="width: {{ '%.0f' | format(v.score * 100) }}%"></div></div><span class="mono">{{ '%.2f' | format(v.score) }}</span></div>{% endif %}
+          </td>
+          <td class="num">{{ v.completed }}/{{ v.total }}</td>
+          <td class="num">{{ '$%.4f' | format(v.cost_per_output) if v.cost_per_output is not none else 'unknown' }}</td>
+          <td class="num">{{ '%.1f s' | format(v.latency_s) if v.latency_s is not none else '-' }}</td>
+          <td class="num">{{ '%.0f%%' | format(c.flip_rate * 100) if c and c.flip_rate is not none else '-' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Pass rate by metric</h2>
+  <p class="note">n is how many outputs were measured. Judge metrics are often scored on a sample.</p>
+  <div class="scroll">
+    <table class="heat">
+      <thead><tr><th>METRIC</th><th class="num">WEIGHT</th>{% for m in models %}<th>{{ m | short }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for spec in metric_specs %}
+        <tr>
+          <td class="tag"><strong>{{ spec.name }}</strong> <span class="badge">{{ spec.type }}</span><div class="sub">{{ spec.description }}</div></td>
+          <td class="num">{{ '%.0f%%' | format(spec.weight * 100) }}</td>
+          {% for m in models %}{% set s = card[m].metrics[spec.name] %}
+            <td class="cell" style="{{ heat_style(s.pass_rate) }}">{{ '%.0f%%' | format(s.pass_rate * 100) if s.pass_rate is not none else '-' }}<small>n={{ s.n }}</small></td>
+          {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+    <h2>Where each model is strong or weak</h2>
+    <p class="note">Quality score by kind of case, on the same metrics as the scorecard. A small n means a rough number; a dash means no judged card of that kind yet.</p>
+    <div class="scroll">
+      <table class="heat">
+        <thead><tr><th>CASE TYPE</th>{% for m in models %}<th>{{ m | short }}</th>{% endfor %}</tr></thead>
+        <tbody>
+        {% set ns = namespace(group='') %}
+        {% for tag, by_model in result.where | dictsort %}
+          {% set group, value = tag.split('=', 1) %}
+          {% if group != ns.group %}{% set ns.group = group %}<tr class="group"><td colspan="{{ models | length + 1 }}">{{ group | replace('_', ' ') }}</td></tr>{% endif %}
+          <tr>
+            <td class="tag">{{ value | replace('_', ' ') }}</td>
+            {% for m in models %}{% set c = by_model.get(m) %}
+              <td class="cell" style="{{ heat_style(c.score if c else none) }}">{{ '%.2f' | format(c.score) if c and c.score is not none else '-' }}{% if c and c.score is not none %}<small>n={{ c.n }}</small>{% endif %}</td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="legend"><span>weak</span><span class="sw" style="background:#FBE3CF"></span><span class="sw" style="background:#DCE4F8"></span><span class="sw" style="background:#8FA8E8"></span><span class="sw" style="background:#2449B8"></span><span>strong</span></div>
+</section>
+
+<div class="row">
+
+  <section class="panel">
+    <h2>Cost vs quality</h2>
+    <p class="note">Models on the dashed line are the best value at their price: nothing else is both cheaper and better.</p>
+    {% set sc = scatter %}
+    {% if sc.points %}
+    <svg class="chart" viewBox="0 0 480 250" width="100%" role="img" aria-label="Quality score against cost per card for each ranked model" style="font-family: inherit;">
+      <line x1="56" y1="200" x2="380" y2="200" stroke="#C4C8D0"></line>
+      <line x1="56" y1="24" x2="56" y2="200" stroke="#C4C8D0"></line>
+      <text x="330" y="216" text-anchor="middle" font-size="11" fill="#4A505C">{{ '$%.4f' | format(sc.max_cost) }}</text>
+      <text x="193" y="238" text-anchor="middle" font-size="12" fill="#4A505C">cost per card →</text>
+      <text x="52" y="28" text-anchor="end" font-size="11" fill="#4A505C">{{ '%.2f' | format(sc.hi) }}</text>
+      <text x="52" y="200" text-anchor="end" font-size="11" fill="#4A505C">{{ '%.2f' | format(sc.lo) }}</text>
+      <text x="56" y="216" text-anchor="middle" font-size="11" fill="#4A505C">$0</text>
+      <text x="430" y="216" text-anchor="middle" font-size="11" fill="#4A505C">no price</text>
+      <line x1="392" y1="24" x2="392" y2="200" stroke="#EEF0F3" stroke-dasharray="3 3"></line>
+      {% if sc.line %}<polyline points="{{ sc.line }}" fill="none" stroke="#2449B8" stroke-width="2" stroke-dasharray="5 4"></polyline>{% endif %}
+      {% for p in sc.points %}
+        <circle cx="{{ p.x }}" cy="{{ p.y }}" r="7" fill="{{ '#2449B8' if p.best else '#B9562A' }}"><title>{{ p.model }}: {{ '%.2f' | format(p.score) }}{{ ', $%.4f per card' | format(p.cost) if p.priced else ', no price set' }}</title></circle>
+        <text x="{{ p.x + 8 if not p.priced else p.x + 11 }}" y="{{ p.y + 22 if not p.priced else p.y + 4 }}" font-size="12" fill="#16181D" text-anchor="{{ 'end' if not p.priced else 'start' }}" font-weight="{{ 600 if p.best else 400 }}">{{ p.model | short | truncate(18, true, '…') }}</text>
+      {% endfor %}
+    </svg>
+    {% else %}<div class="empty">No ranked models yet.</div>{% endif %}
+  </section>
+  <section class="panel">
+    <h2>Consistency</h2>
+    <p class="note">Each case ran more than once. Score spread is how much quality moved between repeats; flips are how often a metric passed on one repeat and failed on another.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>MODEL</th><th class="num">CASES REPEATED</th><th class="num">SCORE SPREAD</th><th class="num">FLIPS</th></tr></thead>
+        <tbody>
+        {% for m in models %}{% set c = result.consistency[m] %}
+          <tr><td>{{ m | short }}</td>
+            {% if c %}<td class="num">{{ c.cases }}</td><td class="num">{{ '%.3f' | format(c.score_spread) if c.score_spread is not none else '-' }}</td><td class="num">{{ '%.0f%%' | format(c.flip_rate * 100) if c.flip_rate is not none else '-' }}</td>
+            {% else %}<td class="num" colspan="3">no repeats</td>{% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<section class="panel" id="judge">
+  <h2>Judge</h2>
+  <p class="note">{{ judge.judged }} of {{ judge.finished }} finished cards have judge scores. The judge ({{ judge.judges | map('short') | join(' or ') }}, never the same family as the writer) scores the subjective metrics. A sample of 6 cards per model is enough for a first look.</p>
+  {% if judge.over %}<p class="problems" style="list-style: none;">That's over the budget. Judge fewer cards per model, or raise the budget.</p>{% endif %}
+  <form method="get" action="/runs/{{ name }}#judge" class="inline">
+    <div><label class="field" for="judge_sample">Cards per model</label>
+      <input id="judge_sample" name="judge_sample" type="number" min="1" value="{{ judge.sample }}" style="width: 120px;"></div>
+    <button class="btn" type="submit">Estimate cost</button>
+  </form>
+  {% if judge.estimate %}{% set e = judge.estimate %}
+  <div class="estimate" style="margin-top: 14px;" aria-live="polite">
+    <div><div class="big">{{ e.calls }}</div><div class="hint">judge calls</div></div>
+    <div><div class="big">{{ e.cached }}</div><div class="hint">already judged (free)</div></div>
+    <div><div class="big">${{ '%.2f' | format(e.cost_usd) }}</div><div class="hint">estimated cost{{ '; budget $%.2f' | format(judge.budget) if judge.budget is not none }}</div></div>
+  </div>
+  <form method="post" action="/runs/{{ name }}/judge" style="margin-top: 14px;">
+    <input type="hidden" name="sample" value="{{ judge.sample }}">
+    {% if config.mock %}<input type="hidden" name="mock" value="true">{% endif %}
+    <button class="btn primary" type="submit">Judge {{ judge.sample ~ ' cards per model' if judge.sample else 'every card' }}</button>
+  </form>
+  {% endif %}
+  <h3 style="margin: 20px 0 4px; font-size: 15px;">Does the judge agree with a person?</h3>
+  <p class="note">{{ result.review.trust }}. <a href="/review/{{ name }}">Open the review queue</a>.</p>
+  {% with summary = result.review %}{% include "_agreement.html" %}{% endwith %}
+</section>
+
+<section class="panel">
+  <h2>Why they fail</h2>
+  <p class="note">{% if patterns %}Recurring problems the judge found, grouped by <code>bench analyze --patterns</code>.{% else %}The metrics each model fails most, with examples. Run <code>bench analyze --patterns</code> to group the judge's reasons into recurring problems.{% endif %}</p>
+  <div class="fails">
+  {% for m in models %}
+    <div class="fail-card">
+      <h3>{{ m | short }}</h3>
+      {% if patterns.get(m) %}
+        {% for p in patterns[m] %}
+          <div class="fail-item"><span class="count">{{ p.count }}×</span> <strong>{{ p.name }}</strong>
+            {% if p.examples %}<div>{% for ex in p.examples %}<a href="/runs/{{ name }}/cases/{{ ex }}">{{ ex }}</a>{{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}
+          </div>
+        {% endfor %}
+      {% elif result.failures[m] %}
+        {% for metric, f in result.failures[m].items() %}{% if loop.index <= 3 %}
+          <div class="fail-item"><span class="count">failed {{ f.failed }} of {{ f.measured }}</span> <strong>{{ metric }}</strong>
+            {% set ex = f.examples[0] %}<div><a href="/runs/{{ name }}/cases/{{ ex.case }}">{{ ex.case }}</a>{% if ex.evidence %}: {{ ex.evidence | truncate(220) }}{% endif %}</div>
+          </div>
+        {% endif %}{% endfor %}
+      {% else %}<div class="sub">No failures measured.</div>{% endif %}
+    </div>
+  {% endfor %}
+  </div>
+</section>
+{% endblock %}

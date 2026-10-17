@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ case.id }} side by side · Model Bench{% endblock %}
+{% block main %}
+<div class="head">
+  <div>
+    <a href="/runs/{{ name }}">Back to results</a>
+    <h1>Side by side · {{ case.id }} <span class="sub mono">({{ position }} of {{ case_ids | length }})</span></h1>
+  </div>
+  <form class="picker" method="get" action="/runs/{{ name }}/cases/{{ case.id }}" onsubmit="this.action='/runs/{{ name }}/cases/'+this.case.value">
+    <label for="case">Case</label>
+    <select id="case" name="case" onchange="this.form.requestSubmit()">
+      {% for c in case_ids %}<option value="{{ c }}" {{ 'selected' if c == case.id }}>{{ c }}{% if case_tags[c] %} · {{ case_tags[c].values() | select | join(', ') | replace('_', ' ') }}{% endif %}</option>{% endfor %}
+    </select>
+    <noscript><button class="btn" type="submit">Go</button></noscript>
+    <a class="btn icon" aria-label="Previous case" href="{{ '/runs/' ~ name ~ '/cases/' ~ prev if prev else '#' }}" {{ 'aria-disabled=true' if not prev }}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 3 5 8l5 5"></path></svg></a>
+    <a class="btn icon" aria-label="Next case" href="{{ '/runs/' ~ name ~ '/cases/' ~ next if next else '#' }}" {{ 'aria-disabled=true' if not next }}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 3 5 5-5 5"></path></svg></a>
+  </form>
+</div>
+
+<section class="panel">
+  <dl class="inputs">
+    {% for k, v in case.inputs.items() %}<div><dt>{{ k }}</dt><dd>{{ v }}</dd></div>{% endfor %}
+  </dl>
+  {% if case.tags %}<div class="tabs" style="margin-top: 12px;">{% for k, v in case.tags.items() if v %}<span class="badge">{{ k | replace('_', ' ') }}: {{ v | replace('_', ' ') }}</span>{% endfor %}</div>{% endif %}
+</section>
+
+{% if repeats | length > 1 %}
+<nav class="tabs" aria-label="Repeat">
+  <span class="sub">Repeat</span>
+  {% for r in repeats %}<a href="?repeat={{ r }}" class="{{ 'on' if r == repeat }}">{{ r }}</a>{% endfor %}
+</nav>
+{% endif %}
+
+<div class="cards">
+{% for c in cards %}
+  <article class="card">
+    <header><strong>{{ c.model | short }}</strong>{% if c.score is not none %}<span class="score" title="Quality on the metrics measured for this output">{{ '%.2f' | format(c.score) }}</span>{% endif %}</header>
+    <div class="meta">{{ '$%.4f' | format(c.cost) if c.cost is not none else 'cost unknown' }} · {{ '%.1f s' | format(c.latency) if c.latency else 'from cache' }}</div>
+    {% if c.html is not none %}<div class="out">{{ c.html | safe }}</div>{% else %}<div class="err">No output: {{ c.error }}</div>{% endif %}
+    {% if c.checks %}
+    <div class="checks">
+      {% for k in c.checks %}<div><span class="badge {{ 'pass' if k.passed else 'fail' }}">{{ 'PASS' if k.passed else 'FAIL' }}</span><span>{{ k.name }}{% if not k.passed and k.detail %}: <span class="mono">{{ k.detail | join(', ') | truncate(120) }}</span>{% endif %}</span></div>{% endfor %}
+    </div>
+    {% endif %}
+    {% for j in c.judge %}
+    <details {{ 'open' if j.passed is false }}>
+      <summary><span class="badge {{ 'pass' if j.passed else 'fail' if j.passed is false else '' }}">{{ j.score if j.score is not none else '?' }}/5</span> Judge: {{ j.name }}</summary>
+      <p>{{ j.reasoning }}</p>
+      {% for q in j.evidence %}<blockquote class="quote">{{ q }}</blockquote>{% endfor %}
+    </details>
+    {% endfor %}
+  </article>
+{% endfor %}
+</div>
+
+<div class="legend"><mark class="bad">orange</mark> a number not in the profiles, or a phrase the judge quoted when failing the card. Hover for the reason.</div>
+{% endblock %}

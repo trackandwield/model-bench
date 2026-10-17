@@ -47,6 +47,15 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     return yaml.safe_load(path.read_text())
 
 
+def configured_prices(config: dict) -> dict[str, dict]:
+    """$ per million tokens for models whose price is filled in under price_per_mtok."""
+    return {
+        m["id"]: m["price_per_mtok"]
+        for m in config.get("models", [])
+        if all(isinstance((m.get("price_per_mtok") or {}).get(k), (int, float)) for k in ("input", "output"))
+    }
+
+
 def provider(model: str) -> str:
     return model.split("/", 1)[0]
 

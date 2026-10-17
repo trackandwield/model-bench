@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Running' if job.kind == 'run' else 'Judging' }} · Model Bench{% endblock %}
+{% block head %}{% if job.status == 'running' %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block main %}
+<div>
+  <div class="eyebrow">{{ job.run_name }}</div>
+  <h1>{% if job.status == 'running' %}{{ 'Running' if job.kind == 'run' else 'Judging' }}…{% elif job.status == 'finished' %}Done{% else %}Stopped with an error{% endif %}</h1>
+</div>
+<section class="panel" aria-live="polite">
+  {% if job.kind == 'run' %}
+    <p style="margin-top: 0;">{{ job.done }} of {{ job.total }} cards written{% if job.failed %}, {{ job.failed }} didn't finish{% endif %}.</p>
+    <div class="progress" role="progressbar" aria-valuenow="{{ job.percent }}" aria-valuemin="0" aria-valuemax="100"><div style="width: {{ job.percent }}%"></div></div>
+  {% elif job.status == 'running' %}
+    <p style="margin-top: 0;">The judge is scoring {{ job.total }} output × metric pairs. This page refreshes on its own.</p>
+  {% else %}
+    <p style="margin-top: 0;">{{ job.done }} judgments{% if job.failed %}, {{ job.failed }} without a score{% endif %}.</p>
+  {% endif %}
+  {% if job.status == 'finished' %}
+    <p>Spent ${{ '%.4f' | format(job.spent) }}.{% if job.failed and job.kind == 'run' %} Retry the unfinished ones (finished calls are free) with <code>uv run python -m bench run --resume runs/{{ job.run_name }}.config.json</code>.{% endif %}</p>
+    <a class="btn primary" href="/runs/{{ job.run_name }}">See results</a>
+  {% elif job.status == 'error' %}
+    <p class="problems" style="list-style: none;">{{ job.error }}</p>
+    <a class="btn" href="/runs">Saved runs</a>
+  {% else %}
+    <p class="hint">You can leave this page; the work keeps going while the app is running.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -120,13 +121,22 @@ async def run_case(task: Task, case: dict, model: str, *, settings: dict, store:
     return result
 
 
-async def run_matrix(task: Task, cases: list[dict], models: list[str], repeats: int = 1, **kw) -> list[CaseResult]:
-    """Every model × case × repeat, with per-provider concurrency limits."""
+async def run_matrix(task: Task, cases: list[dict], models: list[str], repeats: int = 1,
+                     on_done: Callable[[CaseResult], None] | None = None, **kw) -> list[CaseResult]:
+    """Every model × case × repeat, with per-provider concurrency limits. `on_done` is
+    called as each chain finishes, so a caller can show progress."""
+
+    async def tracked(coro):
+        result = await coro
+        if on_done:
+            on_done(result)
+        return result
+
     by_provider: dict[str, list] = defaultdict(list)
     for m in models:
         for c in cases:
             for r in range(1, repeats + 1):
-                by_provider[provider(m)].append(run_case(task, c, m, repeat=r, **kw))
+                by_provider[provider(m)].append(tracked(run_case(task, c, m, repeat=r, **kw)))
     results = await gather_limited(by_provider)
     rank = {(m, c["id"]): (i, j) for i, m in enumerate(models) for j, c in enumerate(cases)}
     return sorted(results, key=lambda r: (rank[(r.model, r.case_id)], r.repeat))
@@ -151,9 +161,10 @@ def apply_checks(results: list[CaseResult], cases: list[dict], specs: list[dict]
 
 def run(task: Task, cases: list[dict], models: list[str], *, settings: dict, mock=False, use_cache=True,
         store=None, prices=None, check_specs: list[dict] | None = None, repeats: int = 1,
-        budget: Budget | None = None, run_id: str | None = None):
+        budget: Budget | None = None, run_id: str | None = None, on_done: Callable[[CaseResult], None] | None = None):
     run_id = run_id or new_run_id()
     results = asyncio.run(run_matrix(task, cases, models, repeats=repeats, settings=settings, store=store or Store(),
-                                     run_id=run_id, mock=mock, use_cache=use_cache, prices=prices, budget=budget))
+                                     run_id=run_id, mock=mock, use_cache=use_cache, prices=prices, budget=budget,
+                                     on_done=on_done))
     apply_checks(results, cases, check_specs or [])
     return run_id, results, write_results(run_id, task, settings, results)
