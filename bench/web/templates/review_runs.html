@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Review queue · Model Bench{% endblock %}
+{% block main %}
+<div>
+  <h1>Review queue</h1>
+  <p class="lede">Score judged cards yourself, one at a time, without seeing which model wrote them or what the judge said. Your scores show how far to trust the judge, and they fill in rep_ready, which only a person can score.</p>
+</div>
+<section class="panel">
+{% if runs %}
+  <div class="scroll">
+    <table>
+      <thead><tr><th>RUN</th><th>TASK</th><th class="num">JUDGED CARDS</th><th class="num">REVIEWED</th><th></th></tr></thead>
+      <tbody>
+      {% for r in runs %}
+        <tr>
+          <td class="mono">{{ r.run_id }}{% if r.mock %} <span class="badge">mock</span>{% endif %}</td>
+          <td>{{ r.task }}</td>
+          <td class="num">{{ r.judged }}</td>
+          <td class="num">{{ r.reviewed }}{% if r.skipped %} <span class="sub">(+{{ r.skipped }} skipped)</span>{% endif %}</td>
+          <td><a class="btn {{ 'primary' if r.reviewed + r.skipped < r.judged }}" href="/review/{{ r.name }}">{{ 'Review' if r.reviewed + r.skipped < r.judged else 'See agreement' }}</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="empty">No judged cards yet. Judge a run from its results page first, then review here.</div>
+{% endif %}
+</section>
+{% endblock %}

@@ -10,7 +10,7 @@ from pathlib import Path
 import litellm
 from dotenv import load_dotenv
 
-from bench import analyze, checks, compare, dataset, judge, metrics, plan, tasks, workflow
+from bench import analyze, checks, compare, dataset, judge, metrics, plan, review, tasks, workflow
 from bench.models import call_model, configured_prices, load_config
 from bench.store import Store
 
@@ -291,7 +291,10 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     spec = metrics.load(task_name)
     cases = {c["id"]: c for c in dataset.load(task_name)}
     analyze.fill_prices(rows, configured_prices(load_config()))  # a price added after the run still counts
+    reviews = review.load(path)  # scores from the web app's Review queue, if any
+    review.merge(rows, reviews)
     result = analyze.analyze(rows, spec, cases)
+    result["review"] = review.summary(rows, reviews, spec)
 
     if args.patterns:
         import asyncio

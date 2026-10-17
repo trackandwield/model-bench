@@ -38,7 +38,10 @@ def metric_value(row: dict, metric: dict) -> float | None:
     if metric["type"] == "judge":
         j = (row.get("judge") or {}).get(metric["name"])
         return None if not j or j.get("score") is None else (j["score"] - 1) / 4
-    return None  # human metrics come from the review screen; operational ones aren't quality
+    if metric["type"] == "human":  # scored in the blind review screen, merged in by bench.review
+        h = (row.get("human") or {}).get(metric["name"])
+        return None if not h or h.get("score") is None else (h["score"] - 1) / 4
+    return None  # operational metrics (cost, latency) aren't quality
 
 
 def metric_passed(row: dict, metric: dict) -> bool | None:
@@ -48,6 +51,9 @@ def metric_passed(row: dict, metric: dict) -> bool | None:
     if metric["type"] == "judge":
         j = (row.get("judge") or {}).get(metric["name"])
         return None if not j else passes(j.get("score"), metric["pass"])
+    if metric["type"] == "human":
+        h = (row.get("human") or {}).get(metric["name"])
+        return None if not h else passes(h.get("score"), metric["pass"])
     return None
 
 
@@ -64,7 +70,7 @@ def scorecard(rows: list[dict], spec: dict, min_n: int = 5) -> dict:
     "basis"), with the locked weights re-normalized over them. A metric judged on
     only a small sample is still shown, just not used to rank.
     """
-    scored = [m for m in spec["metrics"] if m["type"] in ("check", "judge")]
+    scored = [m for m in spec["metrics"] if m["type"] in ("check", "judge", "human")]
     out = {}
     for model in dict.fromkeys(r["model"] for r in rows):
         mine = [r for r in rows if r["model"] == model]
@@ -134,7 +140,7 @@ def where(rows: list[dict], spec: dict, cases: dict[str, dict], basis: list[str]
 
 def consistency(rows: list[dict], spec: dict) -> dict:
     """How much a model's results change between repeats of the same case."""
-    scored = [m for m in spec["metrics"] if m["type"] in ("check", "judge")]
+    scored = [m for m in spec["metrics"] if m["type"] in ("check", "judge", "human")]
     by_case: dict[tuple, list[dict]] = defaultdict(list)
     for r in rows:
         if r.get("output") is not None:
@@ -182,7 +188,7 @@ def frontier(card: dict) -> list[str]:
 
 def failures(rows: list[dict], spec: dict, limit: int = 3) -> dict:
     """Per model: how often each metric failed, with example cases and evidence."""
-    scored = [m for m in spec["metrics"] if m["type"] in ("check", "judge")]
+    scored = [m for m in spec["metrics"] if m["type"] in ("check", "judge", "human")]
     out = {}
     for model in dict.fromkeys(r["model"] for r in rows):
         counts = {}
@@ -237,10 +243,10 @@ def recommend(card: dict, spec: dict, good_enough: float = 0.05) -> list[str]:
             lines.append(f"{m} passes under 70% of the time on: {', '.join(weak)}.")
     total = sum(m["weight"] for m in spec["metrics"])
     any_v = next(iter(ranked.values()))
-    left_out = [m["name"] for m in spec["metrics"] if m["type"] in ("check", "judge") and m["name"] not in any_v["basis"]]
+    left_out = [m["name"] for m in spec["metrics"] if m["type"] in ("check", "judge", "human") and m["name"] not in any_v["basis"]]
     lines.append(f"Caveat: the score is based on {', '.join(any_v['basis'])}: {any_v['weight_measured'] / total:.0%} "
-                 "of the locked weight. Human-reviewed metrics aren't in it yet"
-                 + (f", and {', '.join(left_out)} had too few judged outputs for every model to rank on."
+                 "of the locked weight"
+                 + (f". {', '.join(left_out)} had too few judged or reviewed outputs for every model to rank on."
                     if left_out else "."))
     if skipped:
         lines.append(f"Not ranked (finished under {MIN_COMPLETION:.0%} of cases): {', '.join(skipped)}.")
@@ -336,6 +342,15 @@ def report_markdown(result: dict, run_name: str) -> str:
         for p in result.get("patterns", {}).get(m, []):
             lines.append(f"- Pattern: {p.get('name')} ({p.get('count')}), e.g. {', '.join(p.get('examples', []))}")
         lines.append("")
+    if rev := result.get("review"):
+        lines += ["## Judge check", "", f"{rev['trust']}.", ""]
+        if rev["agreement"]:
+            lines += ["| Metric | Cards | Same score | Within 1 point | Judge vs person |", "|---|---|---|---|---|"]
+            for name, a in rev["agreement"].items():
+                lean = a["judge_minus_human"]
+                lines.append(f"| {name} | {a['n']} | {a['exact']:.0%} | {a['within_1']:.0%} | "
+                             f"{'higher' if lean > 0 else 'lower' if lean < 0 else 'same'} by {abs(lean):.1f} on average |")
+            lines.append("")
     if result["frontier"]:
         lines += ["## Cost vs quality", "",
                   f"No other model is both cheaper and better than: {', '.join(short[m] for m in result['frontier'])}.", ""]

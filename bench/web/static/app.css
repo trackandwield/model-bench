@@ -138,3 +138,20 @@ select.wide { width: 100%; }
 .step-prompt { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; background: var(--ground); padding: 10px; border-radius: 6px; max-height: 220px; overflow: auto; }
 .progress { height: 10px; border-radius: 5px; background: var(--line); }
 .progress > div { height: 10px; border-radius: 5px; background: var(--accent); }
+
+/* Review queue */
+.trust { margin: 12px 0 0; font-size: 13px; color: #FFD9B8; }
+.trust.ok { color: #BDE5CF; }
+.trust a { color: inherit; }
+.review { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.review > .col { flex: 1 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.scoring { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.metric { border: none; padding: 0; margin: 0 0 18px; }
+.metric legend { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; padding: 0; }
+.scale { display: flex; flex-direction: column; gap: 6px; }
+.scale label { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; cursor: pointer; min-height: 44px; }
+.scale label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.scale input { margin: 3px 0 0; width: 16px; height: 16px; flex: none; }
+.scale .n { font-family: var(--mono); font-weight: 600; flex: none; width: 12px; }
+textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 10px 12px; border: 1px solid #C4C8D0; border-radius: 8px; }
+@media (max-width: 960px) { .scoring { position: static; max-height: none; } }

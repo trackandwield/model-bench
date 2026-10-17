@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markdown_it import MarkdownIt
 
-from bench import analyze, compare, dataset, metrics, tasks
+from bench import analyze, compare, dataset, metrics, review, tasks
 from bench.models import configured_prices, load_config
 from bench.web import jobs
 
@@ -43,12 +43,17 @@ def runs_dir() -> Path:
     return compare.RUNS_DIR
 
 
-def load_rows(name: str) -> list[dict]:
+def run_path(name: str) -> Path:
     if not _RUN_NAME.match(name):
         raise HTTPException(404, "No such run")
     path = runs_dir() / f"{name}.jsonl"
     if not path.exists():
         raise HTTPException(404, "No such run")
+    return path
+
+
+def load_rows(name: str) -> list[dict]:
+    path = run_path(name)
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
@@ -97,7 +102,11 @@ def analyze_run(name: str) -> tuple[list[dict], dict, dict, dict]:
     spec = metrics.load(task)
     cases = {c["id"]: c for c in dataset.load(task)}
     analyze.fill_prices(rows, configured_prices(load_config()))
-    return rows, spec, cases, analyze.analyze(rows, spec, cases)
+    reviews = review.load(run_path(name))
+    review.merge(rows, reviews)
+    result = analyze.analyze(rows, spec, cases)
+    result["review"] = review.summary(rows, reviews, spec)
+    return rows, spec, cases, result
 
 
 def heat_style(score: float | None) -> str:
@@ -174,7 +183,7 @@ def card_view(row: dict, spec: dict) -> dict:
         if j.get("passed") is False:
             needles += [(q, f"Judge: {m['name']}") for q in j.get("evidence") or []]
     output = row.get("output")
-    score = analyze.output_score(row, [m for m in spec["metrics"] if m["type"] in ("check", "judge")])
+    score = analyze.output_score(row, [m for m in spec["metrics"] if m["type"] in ("check", "judge", "human")])
     return {
         "model": row["model"],
         "html": _marks(output, needles) if output is not None else None,
@@ -218,7 +227,7 @@ def results_page(request: Request, name: str, judge_sample: str | None = None, o
         "result": result,
         "card": card,
         "models": order,
-        "metric_specs": [m for m in spec["metrics"] if m["type"] in ("check", "judge")],
+        "metric_specs": [m for m in spec["metrics"] if m["type"] in ("check", "judge", "human")],
         "basis_share": (next(iter(card.values()))["weight_measured"] / total_weight) if card and total_weight else 0,
         "heat_style": heat_style,
         "scatter": scatter(card, result["frontier"]),
@@ -374,3 +383,80 @@ def job_page(request: Request, job_id: str):
     if job is None:
         raise HTTPException(404, "No such job. Jobs are forgotten when the app restarts; the run file is in Saved runs.")
     return templates.TemplateResponse(request, "job.html", {"nav": "runs", "job": job})
+
+
+# Review queue: a person scores judged cards blind, against the judge's own rubrics.
+
+def reviewable_runs() -> list[dict]:
+    out = []
+    for r in list_runs():
+        if not r["judged"]:
+            continue
+        reviews = review.latest(review.load(run_path(r["name"])))
+        r["reviewed"] = sum(1 for v in reviews.values() if not v.get("skipped"))
+        r["skipped"] = len(reviews) - r["reviewed"]
+        out.append(r)
+    return out
+
+
+def review_metrics(spec: dict) -> list[dict]:
+    """The metrics a person scores 1-5: every judge metric (to check the judge) and every human one."""
+    return [m for m in spec["metrics"] if m["type"] in ("judge", "human")]
+
+
+@app.get("/review", response_class=HTMLResponse)
+def review_index(request: Request):
+    return templates.TemplateResponse(request, "review_runs.html", {"nav": "review", "runs": reviewable_runs()})
+
+
+def review_context(name: str, reviewer: str = "") -> dict:
+    rows, spec, cases, result = analyze_run(name)
+    path = run_path(name)
+    todo = review.queue(rows, review.load(path))
+    judged = sum(1 for r in rows if r.get("output") is not None and r.get("judge"))
+    ctx = {"nav": "review", "name": name, "reviewer": reviewer, "todo": len(todo), "judged": judged,
+           "summary": result["review"], "metrics": review_metrics(spec), "problems": [], "picked": {}, "note": ""}
+    if todo:
+        row = todo[0]
+        ctx |= {"pos": rows.index(row), "html": _md.render(row["output"]),
+                "case": cases.get(row["case_id"], {"id": row["case_id"], "inputs": {}, "tags": {}})}
+    return ctx
+
+
+@app.get("/review/{name}", response_class=HTMLResponse)
+def review_page(request: Request, name: str):
+    return templates.TemplateResponse(request, "review.html",
+                                      review_context(name, request.cookies.get("reviewer", "")))
+
+
+@app.post("/review/{name}", response_class=HTMLResponse)
+async def review_submit(request: Request, name: str):
+    form = await request.form()
+    rows = load_rows(name)
+    try:
+        row = rows[int(form.get("pos", ""))]
+    except (ValueError, IndexError):
+        raise HTTPException(400, "That card isn't in this run.")
+    spec = metrics.load(row["task"])
+    reviewer = str(form.get("reviewer", "")).strip()[:80]
+    note = str(form.get("note", "")).strip()[:2000]
+    skipped = form.get("action") == "skip"
+    scores, missing = {}, []
+    for m in review_metrics(spec):
+        v = str(form.get(f"score_{m['name']}", ""))
+        if v in {"1", "2", "3", "4", "5"}:
+            scores[m["name"]] = int(v)
+        else:
+            missing.append(m["name"].replace("_", " "))
+    if missing and not skipped:
+        ctx = review_context(name, reviewer)
+        if ctx.get("pos") != rows.index(row):  # someone else reviewed it meanwhile; just move on
+            return RedirectResponse(f"/review/{name}", status_code=303)
+        ctx |= {"problems": [f"Give a score for {', '.join(missing)}, or skip this card."],
+                "picked": scores, "note": note}
+        return templates.TemplateResponse(request, "review.html", ctx, status_code=400)
+    review.save(run_path(name), row, {} if skipped else scores, note=note, reviewer=reviewer, skipped=skipped)
+    response = RedirectResponse(f"/review/{name}", status_code=303)
+    if reviewer:
+        response.set_cookie("reviewer", reviewer, max_age=60 * 60 * 24 * 365, samesite="lax")
+    return response

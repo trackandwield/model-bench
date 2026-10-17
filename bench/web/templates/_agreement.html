@@ -1,0 +1,14 @@
+{% if summary.agreement %}
+<div class="scroll">
+  <table>
+    <thead><tr><th>METRIC</th><th class="num">CARDS</th><th class="num">SAME SCORE</th><th class="num">WITHIN 1 POINT</th><th>JUDGE VS PERSON</th></tr></thead>
+    <tbody>
+    {% for name, a in summary.agreement.items() %}{% set lean = a.judge_minus_human %}
+      <tr><td>{{ name }}</td><td class="num">{{ a.n }}</td><td class="num">{{ '%.0f%%' | format(a.exact * 100) }}</td>
+        <td class="num">{{ '%.0f%%' | format(a.within_1 * 100) }}</td>
+        <td>{% if lean > 0.05 %}Judge scores {{ '%.1f' | format(lean) }} higher on average{% elif lean < -0.05 %}Judge scores {{ '%.1f' | format(-lean) }} lower on average{% else %}No lean either way{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}

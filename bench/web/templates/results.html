@@ -16,6 +16,7 @@
 <section class="reco" aria-label="Recommendation">
   <div class="eyebrow">Recommendation</div>
   <ul>{% for line in rec %}<li>{{ line }}</li>{% endfor %}</ul>
+  <p class="trust {{ 'ok' if result.review.trusted }}">{{ result.review.trust }}{% if not result.review.trusted %} · <a href="/review/{{ name }}">Review cards</a>{% endif %}</p>
 </section>
 
 <section class="panel">
@@ -154,6 +155,9 @@
     <button class="btn primary" type="submit">Judge {{ judge.sample ~ ' cards per model' if judge.sample else 'every card' }}</button>
   </form>
   {% endif %}
+  <h3 style="margin: 20px 0 4px; font-size: 15px;">Does the judge agree with a person?</h3>
+  <p class="note">{{ result.review.trust }}. <a href="/review/{{ name }}">Open the review queue</a>.</p>
+  {% with summary = result.review %}{% include "_agreement.html" %}{% endwith %}
 </section>
 
 <section class="panel">

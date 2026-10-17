@@ -19,8 +19,8 @@ Marketing teams pick an AI model by gut feel or by a public leaderboard that tes
 |---|---|
 | 1. Foundations: setup, locked metrics, test set | Built; metrics awaiting PMM review |
 | 2. Engine: model layer, tasks, checks, judge, runs | Model layer, task workflows, automatic checks and LLM judge built |
-| 3. Human review and analysis | Analysis built; human review waits for the web app's review screen |
-| 4. Web app and write-up | Web app: run builder, judging, results and side-by-side screens built |
+| 3. Human review and analysis | Analysis and the blind review queue built; reviews pending |
+| 4. Web app and write-up | Web app: run builder, judging, results, side-by-side and review screens built |
 
 ## Run it
 
@@ -104,6 +104,7 @@ A model that finished under half its cases (say, a provider that kept refusing c
 - **Saved runs:** every task run, newest first, with how many outputs finished and how many were judged.
 - **Results:** judge a sample of cards per model (estimate first, same budget as runs), then the recommendation, scorecard, pass rate per metric, a heatmap of where each model is strong or weak, cost vs quality, consistency, and the most common failures with links to the cards behind them.
 - **Side by side:** one case's inputs and every model's card next to each other, with each automatic check, the judge's scores and reasoning, and the numbers or phrases that failed highlighted in the card.
+- **Review queue:** a person scores judged cards one at a time, blind: no model name, no highlights, no judge scores. They score 1 to 5 on the judge's own rubrics, plus `rep_ready`, which only a person scores. Reviews are saved to `runs/<run>.reviews.jsonl`. They show how often the judge agrees with the person (same score, within one point, and which way it leans), and `rep_ready` counts in the analysis once every model has 5 reviews. Until 20 cards are reviewed, results say "Judge not checked against a person yet". `bench analyze` reads the same file.
 
 It's FastAPI with server-rendered pages: no Node or build step, one command to start, and it binds to this computer only unless you pass `--host`.
 

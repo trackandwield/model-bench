@@ -139,3 +139,56 @@ def test_run_over_budget_is_refused(runs_here, monkeypatch):
     page = client.post("/new", data={"task": "battlecard", "action": "run", "models": ["openai/gpt-5-mini"],
                                      "repeats": "3", "budget": "0.0001"})
     assert page.status_code == 400 and "over the $0.00 budget" in page.text
+
+
+def review_rows(tmp_path, n=3):
+    rows = [row("openai/gpt-5-mini", f"bc-00{i}", judge=2, unsourced=()) for i in range(1, n + 1)]
+    (tmp_path / f"{RUN}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return rows
+
+
+SCORES = {"score_no_invented_facts": "2", "score_specific_differentiators": "4",
+          "score_objection_handling": "3", "score_rep_ready": "5"}
+
+
+def test_review_card_is_blind(client, tmp_path):
+    review_rows(tmp_path)
+    page = client.get(f"/review/{RUN}")
+    assert page.status_code == 200 and "3 to go" in page.text
+    assert "gpt-5-mini" not in page.text  # no model name
+    assert "The savings claim" not in page.text and "<mark" not in page.text  # no judge reasoning or highlights
+    assert "Every claim traces to the profiles" in page.text  # the judge's own rubric
+
+
+def test_review_saves_scores_and_moves_on(client, tmp_path):
+    review_rows(tmp_path)
+    pos = client.get(f"/review/{RUN}").text.split('name="pos" value="')[1].split('"')[0]
+    page = client.post(f"/review/{RUN}", data={"pos": pos, "action": "save", "reviewer": "Sam", **SCORES},
+                       follow_redirects=False)
+    assert page.status_code == 303 and page.cookies.get("reviewer") == "Sam"
+    saved = [json.loads(l) for l in (tmp_path / f"{RUN}.reviews.jsonl").read_text().splitlines()]
+    assert saved[0]["scores"]["rep_ready"] == 5 and saved[0]["reviewer"] == "Sam"
+    assert "2 to go" in client.get(f"/review/{RUN}").text
+
+
+def test_review_needs_every_score_unless_skipped(client, tmp_path):
+    review_rows(tmp_path)
+    page = client.post(f"/review/{RUN}", data={"pos": "0", "action": "save", "score_rep_ready": "4"})
+    assert page.status_code == 400 and "Give a score for no invented facts" in page.text
+    assert 'value="4" checked' in page.text  # keeps what was picked
+    skip = client.post(f"/review/{RUN}", data={"pos": "0", "action": "skip"}, follow_redirects=False)
+    assert skip.status_code == 303
+    assert json.loads((tmp_path / f"{RUN}.reviews.jsonl").read_text())["skipped"] is True
+
+
+def test_finished_queue_shows_agreement_and_results_show_trust(client, tmp_path):
+    review_rows(tmp_path)
+    assert "Judge not checked against a person yet (0 of 20 reviews)" in client.get(f"/runs/{RUN}").text
+    for pos in range(3):
+        client.post(f"/review/{RUN}", data={"pos": str(pos), "action": "save", **SCORES})
+    done = client.get(f"/review/{RUN}")
+    assert "All judged cards reviewed" in done.text
+    assert "100%" in done.text  # judge said 2, person said 2
+    results = client.get(f"/runs/{RUN}")
+    assert "(3 of 20 reviews)" in results.text
+    assert "rep_ready" in results.text  # human metric now measured
