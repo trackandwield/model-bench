@@ -43,8 +43,16 @@ def test_models_that_mostly_failed_are_not_ranked():
 
 def test_where_splits_by_case_tag():
     rows = [row("a", f"c{i}", prices=i >= 2) for i in range(6)]
-    table = analyze.where(rows, SPEC, CASES)
+    table = analyze.where(rows, SPEC, CASES, ["prices", "length"])
     assert table["difficulty=tricky"]["a"]["score"] < table["difficulty=normal"]["a"]["score"]
+
+
+def test_where_uses_the_scorecard_metrics_not_whatever_was_measured():
+    # Only c0 was judged (badly). Ranked on facts too, so the tricky cell must include it.
+    rows = [row("a", "c0", facts=1)] + [row("a", f"c{i}") for i in range(1, 6)]
+    table = analyze.where(rows, SPEC, CASES, ["facts", "prices", "length"])
+    assert table["difficulty=tricky"]["a"] == {"score": 0.5, "n": 1}  # facts 0 at weight .5, checks 1
+    assert table["difficulty=normal"]["a"]["score"] is None  # no judged card there: not a checks-only 1.0
 
 
 def test_consistency_counts_pass_fail_flips_between_repeats():
@@ -52,6 +60,12 @@ def test_consistency_counts_pass_fail_flips_between_repeats():
     c = analyze.consistency(rows, SPEC)["a"]
     assert c["cases"] == 1 and c["flip_rate"] == 0.5  # prices flipped, length didn't
     assert c["score_spread"] > 0
+
+
+def test_consistency_compares_repeats_on_the_same_metrics():
+    # Same checks every time; only one repeat was judged. That isn't a change between repeats.
+    rows = [row("a", "c0", 1, facts=1), row("a", "c0", 2), row("a", "c0", 3)]
+    assert analyze.consistency(rows, SPEC)["a"]["score_spread"] == 0
 
 
 def test_frontier_drops_models_that_are_worse_and_dearer():

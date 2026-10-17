@@ -110,22 +110,25 @@ def output_score(row: dict, metrics: list[dict]) -> float | None:
     return sum(v * w for v, w in vals) / total if total else None
 
 
-def where(rows: list[dict], spec: dict, cases: dict[str, dict]) -> dict:
-    """Mean weighted score per model per case tag (e.g. difficulty=tricky)."""
-    scored = [m for m in spec["metrics"] if m["type"] in ("check", "judge")]
-    cells: dict[tuple, list[float]] = defaultdict(list)
+def where(rows: list[dict], spec: dict, cases: dict[str, dict], basis: list[str]) -> dict:
+    """Weighted score per model per case tag (e.g. difficulty=tricky), on the same metrics
+    the scorecard ranks on, so it reads on the same scale. A cell needs at least one
+    measured output on every one of those metrics; `n` is the fewest any metric had."""
+    metrics = [m for m in spec["metrics"] if m["name"] in basis]
+    weight = sum(m["weight"] for m in metrics)
+    cells: dict[tuple, list[dict]] = defaultdict(list)
     for r in rows:
         if r.get("output") is None:
             continue
-        s = output_score(r, scored)
-        if s is None:
-            continue
         for tag, value in (cases[r["case_id"]].get("tags") or {}).items():
             if value is not None:
-                cells[(f"{tag}={value}", r["model"])].append(s)
+                cells[(f"{tag}={value}", r["model"])].append(r)
     table: dict[str, dict] = defaultdict(dict)
-    for (tag, model), vals in sorted(cells.items()):
-        table[tag][model] = {"score": sum(vals) / len(vals), "n": len(vals)}
+    for (tag, model), group in sorted(cells.items()):
+        values = {m["name"]: [v for v in (metric_value(r, m) for r in group) if v is not None] for m in metrics}
+        n = min((len(v) for v in values.values()), default=0)
+        score = sum(_mean(values[m["name"]]) * m["weight"] for m in metrics) / weight if n and weight else None
+        table[tag][model] = {"score": score, "n": n}
     return dict(table)
 
 
@@ -144,7 +147,9 @@ def consistency(rows: list[dict], spec: dict) -> dict:
             continue
         spreads, flips, compared = [], 0, 0
         for g in groups:
-            scores = [s for s in (output_score(r, scored) for r in g) if s is not None]
+            # Compare repeats only on metrics measured on every one of them (judging is often sampled).
+            common = [m for m in scored if all(metric_value(r, m) is not None for r in g)]
+            scores = [s for s in (output_score(r, common) for r in g) if s is not None]
             if len(scores) > 1:
                 spreads.append(statistics.pstdev(scores))
             for m in scored:
@@ -246,7 +251,7 @@ def analyze(rows: list[dict], spec: dict, cases: dict[str, dict]) -> dict:
     card = scorecard(rows, spec)
     return {
         "scorecard": card,
-        "where": where(rows, spec, cases),
+        "where": where(rows, spec, cases, next(iter(card.values()))["basis"] if card else []),
         "consistency": consistency(rows, spec),
         "frontier": frontier(card),
         "failures": failures(rows, spec),
@@ -306,9 +311,12 @@ def report_markdown(result: dict, run_name: str) -> str:
             cells.append("-" if s["pass_rate"] is None else f"{s['pass_rate']:.0%} (n={s['n']})")
         lines.append(f"| {n} | " + " | ".join(cells) + " |")
     lines += ["", "## Where each model does well or badly", "",
+              "Same metrics as the scorecard. n is the fewest outputs behind any one metric in that cell, "
+              "so a small n (usually judged cards) means a rough number.", "",
               "| Case type | " + " | ".join(short[m] for m in models) + " |", "|---|" + "---|" * len(models)]
     for tag, by_model in result["where"].items():
-        cells = [f"{by_model[m]['score']:.2f}" if m in by_model else "-" for m in models]
+        cells = [f"{c['score']:.2f} (n={c['n']})" if (c := by_model.get(m)) and c["score"] is not None else "-"
+                 for m in models]
         lines.append(f"| {tag} | " + " | ".join(cells) + " |")
     lines += ["", "## Consistency across repeats", "", "| Model | Cases repeated | Score spread | Pass/fail flips |",
               "|---|---|---|---|"]
