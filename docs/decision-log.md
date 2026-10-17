@@ -95,3 +95,8 @@ One entry per design choice: date, decision, options considered, why. Mirror int
 ## 2026-10-16: "where" and consistency on the same metrics as the ranking
 - **Found:** with judging on a sample, the case-type table scored each card on whatever was measured on it. Most cards had only checks, so every cell read 0.8 to 1.0 while the ranked scores were near 0.6. Claude Haiku looked best on tricky cases (0.94) despite failing every judged fact check. The consistency spread mixed judged and unjudged repeats the same way.
 - **Fix:** the table uses the scorecard's metrics and weights, shows how many outputs each cell rests on, and leaves a cell blank when it has no judged card. Consistency compares repeats only on metrics measured on all of them.
+
+## 2026-10-17: web app in Python, no separate front end
+- **Choice:** FastAPI serving server-rendered pages from the same repo, instead of Next.js plus FastAPI or Streamlit.
+- **Why:** proof-of-concept scale. One `uv run python -m bench serve` on Windows, no Node toolchain or second server, and the pages reuse `bench.analyze` directly, so the browser and `bench analyze` can't disagree. Streamlit would be quicker but reads as a data tool, and the reviewer is a marketer, not an analyst.
+- **Trade-off:** less interactive than a React app. The pages are plain HTML over a small API surface, so a React front end can be added later without touching the engine.

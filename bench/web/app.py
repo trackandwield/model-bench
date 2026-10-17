@@ -1,0 +1,250 @@
+"""FastAPI app: pages for saved runs, a run's results, and one case side by side.
+
+Every page is computed from the run files in runs/, the same way `bench analyze`
+does it, so the browser and the terminal never disagree.
+"""
+
+from __future__ import annotations
+
+import html
+import json
+import re
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from markdown_it import MarkdownIt
+
+from bench import analyze, compare, dataset, metrics
+from bench.models import configured_prices, load_config
+
+HERE = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=HERE / "templates")
+app = FastAPI(title="Model Bench")
+app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+
+# Model output is shown as Markdown, never as raw HTML.
+_md = MarkdownIt("commonmark", {"html": False}).enable("table")
+_RUN_NAME = re.compile(r"^\d{8}-\d{6}-[\w-]+$")
+
+
+def short(model: str) -> str:
+    return model.split("/")[-1]
+
+
+templates.env.filters["short"] = short
+
+
+def runs_dir() -> Path:
+    return compare.RUNS_DIR
+
+
+def load_rows(name: str) -> list[dict]:
+    if not _RUN_NAME.match(name):
+        raise HTTPException(404, "No such run")
+    path = runs_dir() / f"{name}.jsonl"
+    if not path.exists():
+        raise HTTPException(404, "No such run")
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def load_config_file(name: str) -> dict:
+    path = runs_dir() / f"{name}.config.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def saved_patterns(name: str) -> dict:
+    """Failure patterns from an earlier `bench analyze --patterns`, if it was run."""
+    path = runs_dir() / f"{name}.analysis.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8")).get("patterns") or {}
+
+
+def list_runs() -> list[dict]:
+    """Every task run in runs/, newest first. Single-prompt `compare` runs have no task and are skipped."""
+    out = []
+    for path in sorted(runs_dir().glob("*.jsonl"), reverse=True):
+        if not _RUN_NAME.match(path.stem):
+            continue
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if not rows or "task" not in rows[0] or "case_id" not in rows[0]:
+            continue
+        config = load_config_file(path.stem)
+        out.append({
+            "name": path.stem,
+            "run_id": rows[0]["run_id"],
+            "task": rows[0]["task"],
+            "models": list(dict.fromkeys(r["model"] for r in rows)),
+            "cases": len({r["case_id"] for r in rows}),
+            "repeats": max(r.get("repeat", 1) for r in rows),
+            "finished": sum(1 for r in rows if r.get("output") is not None),
+            "total": len(rows),
+            "judged": sum(1 for r in rows if r.get("judge")),
+            "mock": config.get("mock", False),
+            "locked": config.get("metrics_locked"),
+        })
+    return out
+
+
+def analyze_run(name: str) -> tuple[list[dict], dict, dict, dict]:
+    rows = load_rows(name)
+    task = rows[0]["task"]
+    spec = metrics.load(task)
+    cases = {c["id"]: c for c in dataset.load(task)}
+    analyze.fill_prices(rows, configured_prices(load_config()))
+    return rows, spec, cases, analyze.analyze(rows, spec, cases)
+
+
+def heat_style(score: float | None) -> str:
+    """Background and text color for a 0-1 score: orange is weak, deep blue is strong."""
+    if score is None:
+        return "background: var(--empty); color: var(--muted);"
+    for bar, bg, fg in ((0.8, "#2449B8", "#FFFFFF"), (0.65, "#8FA8E8", "#16181D"), (0.5, "#DCE4F8", "#16181D")):
+        if score >= bar:
+            return f"background: {bg}; color: {fg};"
+    return "background: #FBE3CF; color: #7A3608;"
+
+
+def scatter(card: dict, frontier: list[str]) -> dict:
+    """Points for the cost vs quality chart. Models with no price sit in their own lane on the right."""
+    ranked = {m: v for m, v in card.items() if v["ranked"] and v["score"] is not None}
+    costs = [v["cost_per_output"] for v in ranked.values() if v["cost_per_output"] is not None]
+    scores = [v["score"] for v in ranked.values()]
+    if not ranked:
+        return {"points": [], "line": "", "lo": 0, "hi": 1, "max_cost": 0}
+    lo, hi = max(0.0, min(scores) - 0.1), min(1.0, max(scores) + 0.1)
+    max_cost = max(costs) * 1.15 if costs else 1.0
+    x0, x1, y0, y1 = 56, 330, 200, 24
+
+    def y(s):
+        return y1 + (hi - s) / ((hi - lo) or 1) * (y0 - y1)
+
+    points = []
+    for m, v in ranked.items():
+        priced = v["cost_per_output"] is not None
+        x = x0 + v["cost_per_output"] / max_cost * (x1 - x0) if priced else 430
+        points.append({"model": m, "x": round(x, 1), "y": round(y(v["score"]), 1), "priced": priced,
+                       "best": m in frontier, "score": v["score"], "cost": v["cost_per_output"]})
+    line = " ".join(f"{p['x']},{p['y']}" for p in sorted(points, key=lambda p: p["x"]) if p["best"] and p["priced"])
+    return {"points": points, "line": line, "lo": lo, "hi": hi, "max_cost": max_cost}
+
+
+def _marks(text: str, needles: list[tuple[str, str]]) -> str:
+    """Rendered Markdown with each problem phrase highlighted. Needles are (phrase, why)."""
+    out = _md.render(text)
+    for phrase, why in needles:
+        phrase = phrase.replace("**", "").strip().strip('"“”').strip()
+        if len(phrase) < 2:
+            continue
+        for part in (p.strip() for p in re.split(r"\s*(?:\.\.\.|…)\s*", phrase)):
+            esc = html.escape(part, quote=False)
+            if len(part) >= 2 and esc in out:
+                out = out.replace(esc, f'<mark class="bad" title="{html.escape(why)}">{esc}</mark>', 1)
+    return out
+
+
+def card_view(row: dict, spec: dict) -> dict:
+    """One model's output for the side-by-side page: rendered card, checks, judge notes."""
+    judged = [m for m in spec["metrics"] if m["type"] == "judge"]
+    checked = [m for m in spec["metrics"] if m["type"] == "check"]
+    needles: list[tuple[str, str]] = []
+    checks = []
+    for m in checked:
+        c = (row.get("checks") or {}).get(m["name"])
+        if c is None:
+            continue
+        checks.append({"name": m["name"], "passed": c["passed"], "detail": c.get("detail") or []})
+        if not c["passed"] and m["name"] == "pricing_matches_source":
+            needles += [(str(d), "Price not in the profile") for d in c.get("detail") or []]
+    extra = (row.get("checks") or {}).get("unsourced_numbers")
+    if extra and not extra["passed"]:
+        needles += [(str(d), "Number not in the profile") for d in extra.get("detail") or []]
+    judge = []
+    for m in judged:
+        j = (row.get("judge") or {}).get(m["name"])
+        if not j:
+            continue
+        judge.append({"name": m["name"], "score": j.get("score"), "passed": j.get("passed"),
+                      "reasoning": j.get("reasoning") or j.get("error") or "", "evidence": j.get("evidence") or []})
+        if j.get("passed") is False:
+            needles += [(q, f"Judge: {m['name']}") for q in j.get("evidence") or []]
+    output = row.get("output")
+    score = analyze.output_score(row, [m for m in spec["metrics"] if m["type"] in ("check", "judge")])
+    return {
+        "model": row["model"],
+        "html": _marks(output, needles) if output is not None else None,
+        "error": None if output is not None else next((s.get("error") for s in row.get("steps", []) if s.get("error")), "Failed"),
+        "checks": checks,
+        "judge": judge,
+        "score": score,
+        "cost": row.get("cost_usd"),
+        "latency": row.get("latency_s"),
+    }
+
+
+@app.get("/", include_in_schema=False)
+def home():
+    return RedirectResponse("/runs")
+
+
+@app.get("/runs", response_class=HTMLResponse)
+def runs_page(request: Request):
+    return templates.TemplateResponse(request, "runs.html", {"runs": list_runs(), "nav": "runs"})
+
+
+@app.get("/runs/{name}", response_class=HTMLResponse)
+def results_page(request: Request, name: str):
+    rows, spec, cases, result = analyze_run(name)
+    card = result["scorecard"]
+    models = list(card)
+    ranked = sorted((m for m in models if card[m]["ranked"] and card[m]["score"] is not None),
+                    key=lambda m: -card[m]["score"])
+    order = ranked + [m for m in models if m not in ranked]
+    total_weight = sum(m["weight"] for m in spec["metrics"])
+    return templates.TemplateResponse(request, "results.html", {
+        "nav": "runs",
+        "name": name,
+        "run": next((r for r in list_runs() if r["name"] == name), None),
+        "config": load_config_file(name),
+        "result": result,
+        "card": card,
+        "models": order,
+        "metric_specs": [m for m in spec["metrics"] if m["type"] in ("check", "judge")],
+        "basis_share": (next(iter(card.values()))["weight_measured"] / total_weight) if card and total_weight else 0,
+        "heat_style": heat_style,
+        "scatter": scatter(card, result["frontier"]),
+        "patterns": saved_patterns(name),
+        "first_case": rows[0]["case_id"],
+    })
+
+
+@app.get("/runs/{name}/cases/{case_id}", response_class=HTMLResponse)
+def compare_page(request: Request, name: str, case_id: str, repeat: int = 1):
+    rows = load_rows(name)
+    task = rows[0]["task"]
+    spec = metrics.load(task)
+    cases = {c["id"]: c for c in dataset.load(task)}
+    case_ids = list(dict.fromkeys(r["case_id"] for r in rows))
+    if case_id not in case_ids:
+        raise HTTPException(404, "No such case in this run")
+    repeats = sorted({r.get("repeat", 1) for r in rows if r["case_id"] == case_id})
+    if repeat not in repeats:
+        return RedirectResponse(f"/runs/{name}/cases/{case_id}?repeat={repeats[0]}")
+    here = [r for r in rows if r["case_id"] == case_id and r.get("repeat", 1) == repeat]
+    i = case_ids.index(case_id)
+    return templates.TemplateResponse(request, "compare.html", {
+        "nav": "runs",
+        "name": name,
+        "case": cases.get(case_id, {"id": case_id, "inputs": {}, "tags": {}}),
+        "case_ids": case_ids,
+        "case_tags": {c: cases.get(c, {}).get("tags", {}) for c in case_ids},
+        "position": i + 1,
+        "prev": case_ids[i - 1] if i > 0 else None,
+        "next": case_ids[i + 1] if i + 1 < len(case_ids) else None,
+        "repeat": repeat,
+        "repeats": repeats,
+        "cards": [card_view(r, spec) for r in here],
+    })

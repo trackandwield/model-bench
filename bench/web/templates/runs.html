@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Saved runs · Model Bench{% endblock %}
+{% block main %}
+<div>
+  <h1>Saved runs</h1>
+  <p class="lede">Every comparison run from this folder, newest first. Runs made from the command line show up here too.</p>
+</div>
+<section class="panel">
+{% if runs %}
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>RUN</th><th>TASK</th><th>MODELS</th><th class="num">CASES × REPEATS</th><th class="num">FINISHED</th><th class="num">JUDGED</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for r in runs %}
+        <tr>
+          <td><a href="/runs/{{ r.name }}" class="mono">{{ r.run_id }}</a></td>
+          <td>{{ r.task }}</td>
+          <td>{{ r.models | map('short') | join(', ') }}</td>
+          <td class="num">{{ r.cases }} × {{ r.repeats }}</td>
+          <td class="num">{{ r.finished }}/{{ r.total }}</td>
+          <td class="num">{{ r.judged }}</td>
+          <td>
+            {% if r.mock %}<span class="badge">mock</span>{% endif %}
+            {% if r.locked %}<span class="badge pass">metrics locked</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="empty">No runs yet. Start one with <code>uv run python -m bench run battlecard</code>.</div>
+{% endif %}
+</section>
+{% endblock %}

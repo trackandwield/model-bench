@@ -5,17 +5,23 @@ description = "Run the same marketing task across several LLMs, score the output
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.143.3",
     "jinja2>=3.1",
     "litellm>=1.70",
+    "markdown-it-py>=4.2.0",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
 bench = "bench.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8",
+]
 
 [build-system]
 requires = ["hatchling"]

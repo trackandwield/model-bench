@@ -11,7 +11,7 @@ import litellm
 from dotenv import load_dotenv
 
 from bench import analyze, checks, compare, dataset, judge, metrics, plan, tasks, workflow
-from bench.models import call_model, load_config
+from bench.models import call_model, configured_prices, load_config
 from bench.store import Store
 
 
@@ -49,16 +49,7 @@ def _run_config(args: argparse.Namespace) -> tuple[list[str], dict, dict]:
     config = load_config()
     models = args.model or [m["id"] for m in config["models"]]
     settings = {k: config.get("settings", {}).get(k, d) for k, d in (("temperature", 0.2), ("max_tokens", 1024))}
-    return models, settings, _prices(config)
-
-
-def _prices(config: dict) -> dict[str, dict]:
-    """$ per million tokens for models whose price is filled in under price_per_mtok."""
-    return {
-        m["id"]: m["price_per_mtok"]
-        for m in config.get("models", [])
-        if all(isinstance((m.get("price_per_mtok") or {}).get(k), (int, float)) for k in ("input", "output"))
-    }
+    return models, settings, configured_prices(config)
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
@@ -299,7 +290,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     task_name = rows[0]["task"]
     spec = metrics.load(task_name)
     cases = {c["id"]: c for c in dataset.load(task_name)}
-    analyze.fill_prices(rows, _prices(load_config()))  # a price added after the run still counts
+    analyze.fill_prices(rows, configured_prices(load_config()))  # a price added after the run still counts
     result = analyze.analyze(rows, spec, cases)
 
     if args.patterns:
@@ -347,6 +338,15 @@ def cmd_verify(args: argparse.Namespace) -> int:
     ok = metrics.verify(args.task)
     print("Metrics match their lock." if ok else "Metrics changed since locking (or were never locked).")
     return 0 if ok else 1
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """The web app: saved runs, results and side-by-side outputs in the browser."""
+    import uvicorn
+
+    print(f"Model Bench is at http://{args.host}:{args.port} (Ctrl+C to stop)")
+    uvicorn.run("bench.web.app:app", host=args.host, port=args.port, reload=args.reload, log_level="warning")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -409,6 +409,12 @@ def build_parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="Check a task's metrics haven't changed since locking.")
     verify.add_argument("task")
     verify.set_defaults(func=cmd_verify)
+
+    serve = sub.add_parser("serve", help="Open the web app in your browser.")
+    serve.add_argument("--host", default="127.0.0.1", help="127.0.0.1 keeps it on this computer.")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--reload", action="store_true", help="Restart when the code changes (for development).")
+    serve.set_defaults(func=cmd_serve)
     return parser
 
 

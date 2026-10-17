@@ -19,8 +19,8 @@ Marketing teams pick an AI model by gut feel or by a public leaderboard that tes
 |---|---|
 | 1. Foundations: setup, locked metrics, test set | Built; metrics awaiting PMM review |
 | 2. Engine: model layer, tasks, checks, judge, runs | Model layer, task workflows, automatic checks and LLM judge built |
-| 3. Human review and analysis | Not started |
-| 4. Web app and write-up | Not started |
+| 3. Human review and analysis | Analysis built; human review waits for the web app's review screen |
+| 4. Web app and write-up | Web app: results and side-by-side screens built |
 
 ## Run it
 
@@ -45,6 +45,7 @@ uv run python -m bench judge runs/<run id>-battlecard.jsonl --sample 5  # judge 
 uv run python -m bench judge runs/<run id>-battlecard.jsonl              # judge every card
 uv run python -m bench analyze runs/<run id>-battlecard.jsonl   # scorecard, where, consistency, recommendation (free)
 uv run python -m bench analyze runs/<run id>-battlecard.jsonl --patterns   # plus failure patterns (one judge call per model)
+uv run python -m bench serve   # the web app at http://127.0.0.1:8000
 uv run python -m bench lock battlecard
 uv run python -m bench verify battlecard
 uv run pytest
@@ -95,10 +96,21 @@ Automatic checks can hand their flags to the judge (`show_checks`), so a number 
 
 A model that finished under half its cases (say, a provider that kept refusing calls) is listed but not ranked.
 
+## Web app
+
+`bench serve` opens the bench in the browser, for people who'd rather not read a terminal. It reads the same run files, so anything run from the command line shows up there.
+
+- **Saved runs:** every task run, newest first, with how many outputs finished and how many were judged.
+- **Results:** the recommendation, scorecard, pass rate per metric, a heatmap of where each model is strong or weak, cost vs quality, consistency, and the most common failures with links to the cards behind them.
+- **Side by side:** one case's inputs and every model's card next to each other, with each automatic check, the judge's scores and reasoning, and the numbers or phrases that failed highlighted in the card.
+
+It's FastAPI with server-rendered pages: no Node or build step, one command to start, and it binds to this computer only unless you pass `--host`.
+
 ## Repo layout
 
 ```
 bench/          the engine (CLI, model layer, metrics)
+bench/web/      the web app (FastAPI, templates, CSS)
 tasks/<task>/   task.yaml (prompt or workflow), metrics.yaml and its lock, cases.jsonl (tagged test inputs)
 models.yaml     models under test and the settings held constant
 docs/           decision log
